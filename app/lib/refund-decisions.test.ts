@@ -131,13 +131,13 @@ describe("approvalBlocker", () => {
     }
   });
 
-  it("lets a Team Purchase with no Claimed Seats be approved", () => {
+  it("lets a Team Licence with no Claimed Seats be approved", () => {
     expect(
       approvalBlocker(openIndividualRequest({ purchaseKind: "team" }))
     ).toBeNull();
   });
 
-  it("blocks a Team Purchase once any Seat is Claimed", () => {
+  it("blocks a Team Licence once any Seat is Claimed", () => {
     expect(
       approvalBlocker(
         openIndividualRequest({ purchaseKind: "team", claimedSeatCount: 1 })
@@ -147,7 +147,7 @@ describe("approvalBlocker", () => {
 });
 
 describe("declineBlocker", () => {
-  it("still lets a Team Purchase with Claimed Seats be declined", () => {
+  it("still lets a Team Licence with Claimed Seats be declined", () => {
     expect(
       declineBlocker(
         openIndividualRequest({ purchaseKind: "team", claimedSeatCount: 3 })

@@ -2313,7 +2313,7 @@ This course is still in draft while the cluster examples are rewritten against t
     })
     .run();
 
-  // Team purchase by Bossy McBossface for course 2 (5 seats)
+  // Team licence by Bossy McBossface for course 2 (5 seats)
   const [teamPurchase] = db
     .insert(schema.purchases)
     .values({
@@ -2326,7 +2326,7 @@ This course is still in draft while the cluster examples are rewritten against t
     .returning()
     .all();
 
-  // Generate 5 coupons for the team purchase
+  // Generate 5 coupons for the team licence
   const couponCodes = [
     "TEAM-NODEJS-A1B2C3",
     "TEAM-NODEJS-D4E5F6",
@@ -2370,7 +2370,7 @@ This course is still in draft while the cluster examples are rewritten against t
     .run();
 
   console.log(
-    `Created 1 team with Bossy McBossface as admin, 1 team purchase, and ${seededCoupons.length} coupons (${countRows(schema.coupons, isNotNull(schema.coupons.redeemedByUserId))} redeemed, ${countRows(schema.coupons, isNull(schema.coupons.redeemedByUserId))} available).`
+    `Created 1 team with Bossy McBossface as admin, 1 team licence, and ${seededCoupons.length} coupons (${countRows(schema.coupons, isNotNull(schema.coupons.redeemedByUserId))} redeemed, ${countRows(schema.coupons, isNull(schema.coupons.redeemedByUserId))} available).`
   );
 
   // ─── Generated history ───
@@ -2623,7 +2623,7 @@ This course is still in draft while the cluster examples are rewritten against t
     `Created ${generatedPurchases} generated purchases, ${generatedEnrollments} enrolments and ${generatedProgressRows} lesson progress rows.`
   );
 
-  // ─── Further team purchases ───
+  // ─── Further team licences ───
   // Two more seat purchases so team revenue is not a single row, in mixed
   // redemption states: one team most of the way through its seats, one that has
   // bought and redeemed nothing yet.
@@ -2879,7 +2879,7 @@ This course is still in draft while the cluster examples are rewritten against t
     markComplete(james.id, lessonId, Math.max(0, 8 - i));
   });
 
-  // Open, Team Purchase, no Seat Claimed — can be approved, after which its
+  // Open, Team Licence, no Seat Claimed — can be approved, after which its
   // Seat Codes can no longer be Claimed.
   raiseRefundRequest(
     novakTeam.purchase.id,
@@ -2887,7 +2887,7 @@ This course is still in draft while the cluster examples are rewritten against t
     1
   );
 
-  // Open, Team Purchase, a Seat Claimed after the request was raised — Approve
+  // Open, Team Licence, a Seat Claimed after the request was raised — Approve
   // is blocked, Decline is not.
   const jamesTeam = createTeamPurchase(
     "james.park@student.dev",

@@ -14,13 +14,9 @@ import {
   enrollments,
   lessonProgress,
   courseRatings,
-  purchases,
-  coupons,
-  refundRequests,
   LessonProgressStatus,
-  RefundRequestStatus,
 } from "~/db/schema";
-import { eq, and, or, sql, inArray, isNotNull } from "drizzle-orm";
+import { eq, and, or, sql } from "drizzle-orm";
 import { Card, CardContent, CardHeader } from "~/components/ui/card";
 import { Button } from "~/components/ui/button";
 import { Skeleton } from "~/components/ui/skeleton";
@@ -55,11 +51,7 @@ import {
 import { parseFormData } from "~/lib/validation";
 import { MAX_RATING, MIN_RATING } from "~/lib/ratings";
 import { StarRating, StarRatingInput } from "~/components/star-rating";
-import { REFUND_WINDOW_DAYS, refundLimitBlocker } from "~/lib/refund-decisions";
-import {
-  getPurchaseKind,
-  getRefundProgress,
-} from "~/lib/refund-progress.server";
+import { getRefundOffer } from "~/lib/refunds.server";
 
 function getCourseBySlug(slug: string) {
   return db.select().from(courses).where(eq(courses.slug, slug)).get();
@@ -370,86 +362,6 @@ function rateCourse(userId: number, courseId: number, rating: number) {
     .get();
 }
 
-function getPurchaseForCourse(userId: number, courseId: number) {
-  return db
-    .select()
-    .from(purchases)
-    .where(and(eq(purchases.userId, userId), eq(purchases.courseId, courseId)))
-    .orderBy(sql`${purchases.createdAt} desc`)
-    .get();
-}
-
-// An Open Refund Request is still being decided, and an Approved one ends the
-// Purchase's refund story — either way the Student cannot raise another.
-// A Declined Refund Request does not block a new one.
-function getBlockingRefundRequest(purchaseId: number) {
-  return db
-    .select({ id: refundRequests.id })
-    .from(refundRequests)
-    .where(
-      and(
-        eq(refundRequests.purchaseId, purchaseId),
-        inArray(refundRequests.status, [
-          RefundRequestStatus.Open,
-          RefundRequestStatus.Approved,
-        ])
-      )
-    )
-    .get();
-}
-
-// Compare whole days, not hours — a purchase at 23:00 should still get its
-// full fourteenth day.
-function asDayString(when: Date) {
-  const year = when.getFullYear();
-  const month = String(when.getMonth() + 1).padStart(2, "0");
-  const day = String(when.getDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
-}
-
-/**
- * What the Student would get back if they raised a Refund Request, or null if
- * they cannot raise one on this purchase.
- */
-function getRefundOffer(userId: number, course: { id: number }) {
-  const purchase = getPurchaseForCourse(userId, course.id);
-
-  if (!purchase) return null;
-  if (getBlockingRefundRequest(purchase.id)) return null;
-
-  const purchasedDay = asDayString(new Date(purchase.createdAt));
-  const windowEnd = new Date(purchase.createdAt);
-  windowEnd.setDate(windowEnd.getDate() + REFUND_WINDOW_DAYS);
-  const lastDayInWindow = asDayString(windowEnd);
-  const todayDay = asDayString(new Date());
-  const isWithinWindow =
-    todayDay >= purchasedDay && todayDay <= lastDayInWindow;
-
-  if (!isWithinWindow) return null;
-
-  // The Watch Limit and Completion Limit apply only to an Individual
-  // Purchase; a Team Purchase is decided by its Claimed Seats below.
-  if (
-    getPurchaseKind(purchase.id) === "individual" &&
-    refundLimitBlocker(getRefundProgress(userId, course.id))
-  ) {
-    return null;
-  }
-
-  const claimedSeat = db
-    .select({ id: coupons.id })
-    .from(coupons)
-    .where(
-      and(eq(coupons.purchaseId, purchase.id), isNotNull(coupons.redeemedAt))
-    )
-    .get();
-
-  if (claimedSeat) return null;
-
-  // A Refund is always the full amount the Student paid.
-  return { amount: purchase.amountPaid, lastDayInWindow };
-}
-
 const ratingSchema = z.object({
   rating: z.coerce.number().int().min(MIN_RATING).max(MAX_RATING),
 });
@@ -488,7 +400,7 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     enrolled = isUserEnrolled(currentUserId, course.id);
 
     if (enrolled) {
-      refundOffer = getRefundOffer(currentUserId, { id: course.id });
+      refundOffer = getRefundOffer(db, currentUserId, course.id, new Date());
 
       progress = calculateProgress(currentUserId, course.id, false);
 

@@ -1,6 +1,6 @@
-# Team Purchase refunds are all-or-nothing, and a Claimed Seat blocks them
+# Team Licence refunds are all-or-nothing, and a Claimed Seat blocks them
 
-Only the Team Admin can raise a Refund Request on a Team Purchase, and it is always for the full amount. Once any Seat is Claimed, the whole Team Purchase can't be refunded. This also applies to a Seat Claimed while the request is Open: Approve is blocked, and the request can only be Declined. When a refund on a Team Purchase is approved, its Unclaimed Seats can never be Claimed.
+Only the Team Admin can raise a Refund Request on a Team Licence, and it is always for the full amount. Once any Seat is Claimed, the whole Team Licence can't be refunded. This also applies to a Seat Claimed while the request is Open: Approve is blocked, and the request can only be Declined. When a refund on a Team Licence is approved, its Unclaimed Seats can never be Claimed.
 
 This keeps the rule that a Refund is always the full amount paid. It also means no Student ever keeps an Enrollment that a refunded Purchase was paying for. A Student on a Claimed Seat has no Purchase of their own, so they can't raise a Refund Request.
 

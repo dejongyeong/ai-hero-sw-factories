@@ -25,19 +25,19 @@ _Avoid_: Admin (on its own), Team owner, Manager
 ### Buying
 
 **Purchase**:
-One payment for one course. It is either an Individual Purchase or a Team Purchase.
+One payment for one course. It is either an Individual Purchase or a Team Licence.
 _Avoid_: Order, Transaction, Sale
 
 **Individual Purchase**:
 A Purchase that enrolls the buyer themselves.
 _Avoid_: Personal Purchase, Self purchase, Single purchase
 
-**Team Purchase**:
-A Purchase of several Seats, made by a Team Admin who is not enrolled by it.
-_Avoid_: Team Licence, Bulk purchase
+**Team Licence**:
+A Purchase of several Seats, made by a Team Admin who is not enrolled by it. Like any Purchase it is one payment: topping up buys another Team Licence, each is refunded on its own, and it belongs to the person who paid, not the team. A Claim is permanent and nothing expires.
+_Avoid_: Team Purchase, Team License, Bulk purchase
 
 **Seat**:
-One place on a Team Purchase, handed out as a Seat Code. A Student who Claims one gets their own Enrollment but has no Purchase of their own.
+One place on a Team Licence, handed out as a Seat Code. A Student who Claims one gets their own Enrollment but has no Purchase of their own.
 _Avoid_: Coupon, Licence
 
 **Seat Code**:
@@ -49,10 +49,10 @@ When a Student uses a Seat Code and becomes enrolled.
 _Avoid_: Redeem
 
 **Claimed Seat**:
-A Seat that a Student has Claimed. A Team Purchase with any Claimed Seat cannot be refunded.
+A Seat that a Student has Claimed. A Team Licence with any Claimed Seat cannot be refunded.
 
 **Unclaimed Seat**:
-A Seat that no one has Claimed yet. Once its Team Purchase is refunded, it can never be Claimed.
+A Seat that no one has Claimed yet. Once its Team Licence is refunded, it can never be Claimed.
 
 ### Learning
 

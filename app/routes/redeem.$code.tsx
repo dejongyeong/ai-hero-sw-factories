@@ -41,8 +41,8 @@ function isUserEnrolled(userId: number, courseId: number) {
   return !!existing;
 }
 
-// Once a Team Purchase is refunded, its Unclaimed Seats can never be Claimed.
-// See docs/adr/0003-team-purchase-refunds-are-all-or-nothing.md.
+// Once a Team Licence is refunded, its Unclaimed Seats can never be Claimed.
+// See docs/adr/0003-team-licence-refunds-are-all-or-nothing.md.
 function isPurchaseRefunded(purchaseId: number) {
   const approved = db
     .select({ id: refundRequests.id })
@@ -79,7 +79,7 @@ function redeemCoupon(
   if (isPurchaseRefunded(coupon.purchaseId)) {
     return {
       ok: false,
-      error: "This seat's team purchase was refunded, so it can no longer be claimed",
+      error: "This seat's team licence was refunded, so it can no longer be claimed",
     };
   }
 
@@ -292,7 +292,7 @@ export default function Redeem({
                 </span>
               </div>
               <p className="mt-2 text-sm text-muted-foreground">
-                The team purchase this seat came from has been refunded, so it
+                The team licence this seat came from has been refunded, so it
                 can no longer be claimed.
               </p>
             </div>

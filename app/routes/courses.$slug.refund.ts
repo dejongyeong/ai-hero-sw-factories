@@ -1,28 +1,17 @@
 import { data, redirect } from "react-router";
 import { z } from "zod";
+import { eq } from "drizzle-orm";
 import type { Route } from "./+types/courses.$slug.refund";
 import { getCurrentUserId } from "~/lib/session";
 import { db } from "~/db";
-import {
-  courses,
-  coupons,
-  purchases,
-  refundRequests,
-  users,
-  RefundRequestStatus,
-} from "~/db/schema";
-import { and, eq, isNotNull, sql } from "drizzle-orm";
+import { courses } from "~/db/schema";
 import { parseFormData, parseParams } from "~/lib/validation";
-import { formatPrice } from "~/lib/utils";
 import {
-  REFUND_WINDOW_DAYS,
-  refundLimitBlocker,
-} from "~/lib/refund-decisions";
-import {
-  getPurchaseKind,
-  getRefundProgress,
-} from "~/lib/refund-progress.server";
-
+  checkRefundRequest,
+  findPurchaseToRefund,
+  raiseRefundRequest,
+} from "~/lib/refunds.server";
+import { sendEmail } from "~/lib/mailer.server";
 
 const refundParamsSchema = z.object({
   slug: z.string().min(1),
@@ -40,71 +29,6 @@ function getCourseBySlug(slug: string) {
   return db.select().from(courses).where(eq(courses.slug, slug)).get();
 }
 
-function getLatestPurchase(userId: number, courseId: number) {
-  return db
-    .select()
-    .from(purchases)
-    .where(and(eq(purchases.userId, userId), eq(purchases.courseId, courseId)))
-    .orderBy(sql`${purchases.createdAt} desc`)
-    .get();
-}
-
-function getRefundRequestWithStatus(
-  purchaseId: number,
-  status: RefundRequestStatus
-) {
-  return db
-    .select()
-    .from(refundRequests)
-    .where(
-      and(
-        eq(refundRequests.purchaseId, purchaseId),
-        eq(refundRequests.status, status)
-      )
-    )
-    .get();
-}
-
-// The fourteen-day window is counted in whole days, not hours — someone who
-// buys at 23:00 should still get the whole of their fourteenth day.
-function calendarDay(when: Date): string {
-  const month = String(when.getMonth() + 1).padStart(2, "0");
-  const day = String(when.getDate()).padStart(2, "0");
-  return `${when.getFullYear()}-${month}-${day}`;
-}
-
-function lastDayOfWindow(purchasedAtIso: string): string {
-  const deadline = new Date(purchasedAtIso);
-  deadline.setDate(deadline.getDate() + REFUND_WINDOW_DAYS);
-  return calendarDay(deadline);
-}
-
-/**
- * The confirmation the Student gets in their inbox. There is no mail
- * transport wired up yet, so the built message goes to the server log.
- */
-function buildRefundRequestEmail(input: {
-  studentName: string;
-  studentEmail: string;
-  courseTitle: string;
-  amount: number;
-}) {
-  return {
-    to: input.studentEmail,
-    subject: `Refund requested — ${input.courseTitle}`,
-    body: [
-      `Hi ${input.studentName},`,
-      "",
-      `We have your refund request for "${input.courseTitle}".`,
-      `If it is approved, your refund will be ${formatPrice(input.amount)}, the full amount you paid.`,
-      "",
-      "Our team reviews every refund request by hand. You do not need to do anything else — we will email you again once it has been decided.",
-      "",
-      "— The Cadence team",
-    ].join("\n"),
-  };
-}
-
 export async function action({ params, request }: Route.ActionArgs) {
   const currentUserId = await getCurrentUserId(request);
 
@@ -119,72 +43,18 @@ export async function action({ params, request }: Route.ActionArgs) {
     throw data("Course not found", { status: 404 });
   }
 
-  const student = db
-    .select()
-    .from(users)
-    .where(eq(users.id, currentUserId))
-    .get();
-
-  if (!student) {
-    throw data("User not found", { status: 404 });
-  }
-
-  const purchase = getLatestPurchase(currentUserId, course.id);
+  const purchase = findPurchaseToRefund(db, currentUserId, course.id);
 
   if (!purchase) {
     throw data("You have not bought this course.", { status: 403 });
   }
 
-  // A Purchase has at most one Open Refund Request at a time.
-  if (getRefundRequestWithStatus(purchase.id, RefundRequestStatus.Open)) {
-    throw data("You already have an open refund request on this purchase.", {
-      status: 409,
-    });
+  // Turn an ineligible Student away before asking them to fix their reason.
+  const now = new Date();
+  const check = checkRefundRequest(db, purchase.id, currentUserId, now);
+  if (!check.ok) {
+    throw data(check.error, { status: check.status });
   }
-
-  // Once a Refund Request is approved, no further Refund Request can be
-  // raised on that Purchase. A Declined one does not block a new request.
-  if (getRefundRequestWithStatus(purchase.id, RefundRequestStatus.Approved)) {
-    throw data("This purchase has already been refunded.", { status: 409 });
-  }
-
-  // A seat that came out of a team licence, and has been claimed, belongs to
-  // the team — the Student cannot hand it back on their own.
-  const claimedSeat = db
-    .select({ id: coupons.id })
-    .from(coupons)
-    .where(
-      and(eq(coupons.purchaseId, purchase.id), isNotNull(coupons.redeemedAt))
-    )
-    .get();
-
-  if (claimedSeat) {
-    throw data("A claimed team seat cannot be refunded.", { status: 403 });
-  }
-
-  const today = calendarDay(new Date());
-  const withinRefundWindow = today <= lastDayOfWindow(purchase.createdAt);
-
-  if (!withinRefundWindow) {
-    throw data(`The ${REFUND_WINDOW_DAYS}-day window has closed.`, {
-      status: 403,
-    });
-  }
-
-  // The Watch Limit and Completion Limit apply only to an Individual
-  // Purchase. A Team Admin is not enrolled by a Team Purchase, so their own
-  // Progress says nothing about it — its Claimed Seats decide instead.
-  if (getPurchaseKind(purchase.id) === "individual") {
-    const limitBlocker = refundLimitBlocker(
-      getRefundProgress(currentUserId, course.id)
-    );
-    if (limitBlocker) {
-      throw data(limitBlocker, { status: 403 });
-    }
-  }
-
-  // A Refund is always the full amount the Student paid.
-  const refundableAmount = purchase.amountPaid;
 
   const formData = await request.formData();
   const parsed = parseFormData(formData, refundActionSchema);
@@ -193,26 +63,27 @@ export async function action({ params, request }: Route.ActionArgs) {
     return data({ errors: parsed.errors }, { status: 400 });
   }
 
-  db
-    .insert(refundRequests)
-    .values({
-      purchaseId: purchase.id,
-      status: RefundRequestStatus.Open,
-      reason: parsed.data.reason,
-    })
-    .returning()
-    .get();
-
-  const email = buildRefundRequestEmail({
-    studentName: student.name,
-    studentEmail: student.email,
-    courseTitle: course.title,
-    amount: refundableAmount,
-  });
-
-  console.log(
-    `[email] to=${email.to} subject=${email.subject}\n${email.body}`
+  const raised = raiseRefundRequest(
+    db,
+    purchase.id,
+    currentUserId,
+    parsed.data.reason,
+    now
   );
 
-  return redirect("/settings");
+  if (!raised.ok) {
+    throw data(raised.error, { status: raised.status });
+  }
+
+  // The Refund Request is raised whether or not the confirmation goes out, so
+  // a mail failure is logged rather than shown to the Student as an error.
+  try {
+    await sendEmail(raised.email);
+  } catch (error) {
+    console.error("Could not send the refund request confirmation:", error);
+  }
+
+  // A Student follows an Individual Purchase's Refund Request from Settings; a
+  // Team Admin follows a Team Licence's from the team page.
+  return redirect(raised.kind === "team" ? "/team" : "/settings");
 }

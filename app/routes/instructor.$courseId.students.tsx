@@ -63,7 +63,7 @@ function getCourseLapsedStudents(courseId: number, enrolledUserIds: Set<number>)
       and(
         eq(purchases.courseId, courseId),
         eq(refundRequests.status, RefundRequestStatus.Approved),
-        // A Team Purchase never enrolled its buyer, so it has no one to lapse.
+        // A Team Licence never enrolled its buyer, so it has no one to lapse.
         notExists(
           db
             .select({ id: coupons.id })

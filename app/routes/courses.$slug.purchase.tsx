@@ -372,7 +372,7 @@ export async function action({ params, request }: Route.ActionArgs) {
     throw redirect(`/courses/${slug}/welcome`);
   }
 
-  // Team purchase — user does NOT get enrolled themselves
+  // Team licence — user does NOT get enrolled themselves
   const { quantity } = parsed.data;
   const totalPrice = pppPrice * quantity;
   createTeamPurchase(currentUserId, course.id, totalPrice, country, quantity);

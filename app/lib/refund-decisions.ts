@@ -1,12 +1,18 @@
 import { RefundRequestStatus } from "~/db/schema";
 import { formatPrice } from "~/lib/utils";
 
-// The limits a Student must stay under to raise a Refund Request. A Platform
-// Admin sees them again when deciding, because Progress keeps growing while a
-// Refund Request is Open. See docs/adr/0002-progress-outlives-enrollment.md.
-export const REFUND_WINDOW_DAYS = 14;
-export const REFUND_WATCH_LIMIT_SECONDS = 2 * 60 * 60;
-export const REFUND_COMPLETION_LIMIT = 0.5;
+import {
+  REFUND_COMPLETION_LIMIT,
+  REFUND_WATCH_LIMIT_SECONDS,
+} from "~/lib/refund-rules";
+
+// The limits live in refund-rules. A Platform Admin sees them again when
+// deciding, because Progress keeps growing while a Refund Request is Open.
+export {
+  REFUND_COMPLETION_LIMIT,
+  REFUND_WATCH_LIMIT_SECONDS,
+  REFUND_WINDOW_DAYS,
+} from "~/lib/refund-rules";
 
 export type PurchaseKind = "individual" | "team";
 
@@ -32,7 +38,7 @@ export function reachedWatchLimit(progress: RefundProgress): boolean {
 /**
  * Why a Student cannot raise a Refund Request on an Individual Purchase, or
  * null if their Progress is under both limits. The limits never apply to a
- * Team Purchase — its Claimed Seats decide instead.
+ * Team Licence — its Claimed Seats decide instead.
  */
 export function refundLimitBlocker(progress: RefundProgress): string | null {
   if (reachedCompletionLimit(progress)) {
@@ -92,12 +98,12 @@ export function approvalBlocker(context: DecisionContext): string | null {
   const blocker = decisionBlocker(context);
   if (blocker) return blocker;
 
-  // A Team Purchase with any Claimed Seat cannot be refunded — including a
+  // A Team Licence with any Claimed Seat cannot be refunded — including a
   // Seat Claimed while the request was Open.
-  // See docs/adr/0003-team-purchase-refunds-are-all-or-nothing.md.
+  // See docs/adr/0003-team-licence-refunds-are-all-or-nothing.md.
   if (context.purchaseKind === "team" && context.claimedSeatCount > 0) {
     const seats = context.claimedSeatCount === 1 ? "Seat has" : "Seats have";
-    return `${context.claimedSeatCount} ${seats} been claimed on this Team Purchase, so it cannot be refunded.`;
+    return `${context.claimedSeatCount} ${seats} been claimed on this Team Licence, so it cannot be refunded.`;
   }
 
   return null;
@@ -109,8 +115,8 @@ export function declineBlocker(context: DecisionContext): string | null {
 }
 
 /**
- * The email that tells whoever raised the Refund Request how it was decided.
- * There is no mail transport wired up yet, so it goes to the server log.
+ * The email that tells whoever raised the Refund Request how it was decided,
+ * for the caller to send through the mailer.
  */
 export function buildRefundDecisionEmail(input: {
   decision: RefundRequestStatus.Approved | RefundRequestStatus.Declined;

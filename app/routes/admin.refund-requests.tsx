@@ -19,7 +19,8 @@ import {
 import {
   getPurchaseKind,
   getRefundProgress,
-} from "~/lib/refund-progress.server";
+} from "~/lib/refunds.server";
+import { sendEmail } from "~/lib/mailer.server";
 import { db } from "~/db";
 import {
   coupons,
@@ -108,7 +109,7 @@ function getRefundRequestForDecision(refundRequestId: number) {
     .get();
 }
 
-/** Every Seat on a Team Purchase, and how many are Claimed. */
+/** Every Seat on a Team Licence, and how many are Claimed. */
 function getSeatCounts(purchaseId: number) {
   const result = db
     .select({
@@ -143,13 +144,13 @@ export async function loader({ request, url }: Route.LoaderArgs) {
 
   const rows = getRefundRequests(status).map((row) => {
     const seats = getSeatCounts(row.purchaseId);
-    const purchaseKind = getPurchaseKind(row.purchaseId);
+    const purchaseKind = getPurchaseKind(db, row.purchaseId);
 
-    // A Team Admin is not enrolled by their Team Purchase, so their own
+    // A Team Admin is not enrolled by their Team Licence, so their own
     // Progress says nothing about it.
     const progress =
       purchaseKind === "individual"
-        ? getRefundProgress(row.buyerUserId, row.courseId)
+        ? getRefundProgress(db, row.buyerUserId, row.courseId)
         : null;
 
     const context: DecisionContext = {
@@ -202,7 +203,7 @@ export async function action({ request }: Route.ActionArgs) {
   }
 
   const seats = getSeatCounts(refundRequest.purchaseId);
-  const purchaseKind = getPurchaseKind(refundRequest.purchaseId);
+  const purchaseKind = getPurchaseKind(db, refundRequest.purchaseId);
   const context: DecisionContext = {
     status: refundRequest.status,
     deciderUserId: platformAdmin.id,
@@ -263,7 +264,7 @@ export async function action({ request }: Route.ActionArgs) {
         .get();
       if (claimedNow) {
         throw data(
-          "A Seat has been claimed on this Team Purchase, so it cannot be refunded.",
+          "A Seat has been claimed on this Team Licence, so it cannot be refunded.",
           { status: 409 }
         );
       }
@@ -279,7 +280,7 @@ export async function action({ request }: Route.ActionArgs) {
 
     // The Enrollment ends now; the Student's Progress is kept.
     // See docs/adr/0001-enrollment-ends-at-approval.md. A Team Admin is not
-    // enrolled by a Team Purchase, so there is nothing to end for one — its
+    // enrolled by a Team Licence, so there is nothing to end for one — its
     // Unclaimed Seats are refused at Claim time instead.
     if (purchaseKind === "individual") {
       tx.delete(enrollments)
@@ -309,9 +310,12 @@ export async function action({ request }: Route.ActionArgs) {
       amount: refundRequest.amountPaid,
       purchaseKind,
     });
-    console.log(
-      `[email] to=${email.to} subject=${email.subject}\n${email.body}`
-    );
+    // The decision stands whether or not the email goes out.
+    try {
+      await sendEmail(email);
+    } catch (error) {
+      console.error("Could not send the refund decision email:", error);
+    }
   }
 
   return {
@@ -403,7 +407,7 @@ function RefundRequestCard({ row }: { row: Row }) {
               </span>
               <span className="rounded-full bg-muted px-2 py-0.5 text-xs font-medium">
                 {row.purchaseKind === "team"
-                  ? `Team Purchase · ${row.seats.total} Seats`
+                  ? `Team Licence · ${row.seats.total} Seats`
                   : "Individual Purchase"}
               </span>
             </div>
