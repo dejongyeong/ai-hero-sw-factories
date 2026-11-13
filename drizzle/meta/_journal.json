@@ -71,6 +71,20 @@
       "when": 1790083397130,
       "tag": "0009_clear_professor_monster",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "6",
+      "when": 1794578278829,
+      "tag": "0010_drop_conflated_refunds",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "6",
+      "when": 1794578280108,
+      "tag": "0011_refund_requests_and_refunds",
+      "breakpoints": true
     }
   ]
 }
