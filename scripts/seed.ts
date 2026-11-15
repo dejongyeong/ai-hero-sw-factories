@@ -1,5 +1,5 @@
 import Database from "better-sqlite3";
-import { eq, gte, isNotNull, isNull, sql, type SQL } from "drizzle-orm";
+import { and, eq, gte, isNotNull, isNull, sql, type SQL } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import type { SQLiteTable } from "drizzle-orm/sqlite-core";
 import { migrate } from "drizzle-orm/better-sqlite3/migrator";
@@ -12,6 +12,8 @@ import {
   LessonProgressStatus,
   QuestionType,
   TeamMemberRole,
+  RefundRequestStatus,
+  RefundStatus,
 } from "../app/db/schema";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -102,7 +104,7 @@ async function seed() {
   }
 
   // ─── Users ───
-  // 1 admin, 3 instructors (one of whom owns no courses, so the empty
+  // 2 Platform Admins, 3 instructors (one of whom owns no courses, so the empty
   // instructor dashboard is reachable), and ~40 students.
   //
   // Students are split in two: the five named students below, who own all the
@@ -120,6 +122,20 @@ async function seed() {
       role: UserRole.Admin,
       avatarUrl: "https://api.dicebear.com/9.x/avataaars/svg?seed=alex",
       createdAt: daysAgo(120),
+    })
+    .returning()
+    .all();
+
+  // A second Platform Admin, so a Refund Request raised by one of them can be
+  // decided by the other — a Platform Admin can never decide their own.
+  const [secondAdmin] = db
+    .insert(schema.users)
+    .values({
+      name: "Dana Okoye",
+      email: "dana.okoye@ralph.dev",
+      role: UserRole.Admin,
+      avatarUrl: "https://api.dicebear.com/9.x/avataaars/svg?seed=dana",
+      createdAt: daysAgo(90),
     })
     .returning()
     .all();
@@ -266,7 +282,7 @@ async function seed() {
   const studentCount = allStudents.length;
 
   console.log(
-    `Created ${1 + instructorCount + studentCount} users (1 admin, ${instructorCount} instructors, ${studentCount} students).`
+    `Created ${2 + instructorCount + studentCount} users (2 admins, ${instructorCount} instructors, ${studentCount} students).`
   );
 
   // ─── Categories ───
@@ -2715,7 +2731,8 @@ This course is still in draft while the cluster examples are rewritten against t
   );
 
   // Four seats on Design Systems, bought during launch week, none redeemed yet.
-  createTeamPurchase(
+  // Marta has asked for her money back — see Refund Requests below.
+  const novakTeam = createTeamPurchase(
     "marta.novak@student.dev",
     course3,
     4,
@@ -2773,6 +2790,178 @@ This course is still in draft while the cluster examples are rewritten against t
     })
     .run();
 
+  // ─── Refund Requests ───
+  // One of each case the Refund Requests screen has to handle. Liam (above) is
+  // deliberately left without one, so the course page still offers him the
+  // button. Dates count back from today, so the Open ones always sit inside
+  // their fourteen-day window when they were raised.
+
+  function insertPurchase(
+    userId: number,
+    course: typeof course1,
+    purchasedDaysAgo: number
+  ) {
+    const [purchase] = db
+      .insert(schema.purchases)
+      .values({
+        userId,
+        courseId: course.id,
+        amountPaid: course.price,
+        country: "US",
+        createdAt: daysAgo(purchasedDaysAgo),
+      })
+      .returning()
+      .all();
+    return purchase;
+  }
+
+  function raiseRefundRequest(
+    purchaseId: number,
+    reason: string,
+    requestedDaysAgo: number,
+    decision?: {
+      status: RefundRequestStatus.Approved | RefundRequestStatus.Declined;
+      decidedDaysAgo: number;
+    }
+  ) {
+    const [request] = db
+      .insert(schema.refundRequests)
+      .values({
+        purchaseId,
+        reason,
+        requestedAt: daysAgo(requestedDaysAgo),
+        status: decision?.status ?? RefundRequestStatus.Open,
+        decidedAt: decision ? daysAgo(decision.decidedDaysAgo) : null,
+        decidedByUserId: decision ? admin.id : null,
+      })
+      .returning()
+      .all();
+    return request;
+  }
+
+  // Open, Individual Purchase, well under both limits.
+  const sophiaPurchase = db
+    .select()
+    .from(schema.purchases)
+    .where(
+      and(
+        eq(schema.purchases.userId, students[4].id),
+        eq(schema.purchases.courseId, course1.id)
+      )
+    )
+    .get();
+  if (!sophiaPurchase) throw new Error("Sophia's course 1 purchase is missing.");
+  raiseRefundRequest(
+    sophiaPurchase.id,
+    "I thought this covered TypeScript with React. It is mostly the language itself, which I already know.",
+    12
+  );
+
+  // Open, Individual Purchase, past the completion limit since asking — the
+  // screen warns but still lets a Platform Admin approve.
+  const james = studentByEmail("james.park@student.dev");
+  const jamesPurchase = insertPurchase(james.id, course3, 10);
+  db.insert(schema.enrollments)
+    .values({ userId: james.id, courseId: course3.id, enrolledAt: daysAgo(10) })
+    .run();
+  raiseRefundRequest(
+    jamesPurchase.id,
+    "Bought this by mistake — I meant to buy the Node.js course instead.",
+    9
+  );
+  const jamesLessons = course3LessonIds.slice(
+    0,
+    Math.ceil(course3LessonIds.length * 0.6)
+  );
+  jamesLessons.forEach((lessonId, i) => {
+    const duration = lessonDurationSeconds.get(lessonId) ?? 600;
+    addWatchSession(james.id, lessonId, 0, duration, duration, (8 - i) * 24);
+    markComplete(james.id, lessonId, Math.max(0, 8 - i));
+  });
+
+  // Open, Team Purchase, no Seat Claimed — can be approved, after which its
+  // Seat Codes can no longer be Claimed.
+  raiseRefundRequest(
+    novakTeam.purchase.id,
+    "Our team reorganised and the designers who needed this have moved on.",
+    1
+  );
+
+  // Open, Team Purchase, a Seat Claimed after the request was raised — Approve
+  // is blocked, Decline is not.
+  const jamesTeam = createTeamPurchase(
+    "james.park@student.dev",
+    course2,
+    3,
+    "TEAM-API-PARK",
+    6,
+    ["sophia.davis@student.dev"]
+  );
+  raiseRefundRequest(
+    jamesTeam.purchase.id,
+    "Budget for training was cut this quarter.",
+    5
+  );
+
+  // Approved, with its Pending Refund. Olivia's Enrollment has ended but her
+  // Progress is kept.
+  const olivia = studentByEmail("olivia.martinez@student.dev");
+  const oliviaPurchase = insertPurchase(olivia.id, course3, 25);
+  markComplete(olivia.id, course3LessonIds[0], 24);
+  const approvedRequest = raiseRefundRequest(
+    oliviaPurchase.id,
+    "The pace is too fast for me without more Tailwind background.",
+    22,
+    { status: RefundRequestStatus.Approved, decidedDaysAgo: 21 }
+  );
+  db.insert(schema.refunds)
+    .values({
+      refundRequestId: approvedRequest.id,
+      amount: oliviaPurchase.amountPaid,
+      status: RefundStatus.Pending,
+      createdAt: daysAgo(21),
+    })
+    .run();
+
+  // Open, raised by a Platform Admin. Alex can decide it; Dana sees both
+  // buttons disabled, because it is her own.
+  const danaPurchase = insertPurchase(secondAdmin.id, course2, 3);
+  db.insert(schema.enrollments)
+    .values({
+      userId: secondAdmin.id,
+      courseId: course2.id,
+      enrolledAt: daysAgo(3),
+    })
+    .run();
+  raiseRefundRequest(
+    danaPurchase.id,
+    "Bought this to review it for the catalogue, not to take it — please refund.",
+    2
+  );
+
+  // Declined. Emma keeps her Enrollment and may ask again.
+  const emmaCourse2Purchase = db
+    .select()
+    .from(schema.purchases)
+    .where(
+      and(
+        eq(schema.purchases.userId, students[0].id),
+        eq(schema.purchases.courseId, course2.id)
+      )
+    )
+    .get();
+  if (!emmaCourse2Purchase) throw new Error("Emma's course 2 purchase is missing.");
+  raiseRefundRequest(
+    emmaCourse2Purchase.id,
+    "Changed my mind about learning backend development.",
+    38,
+    { status: RefundRequestStatus.Declined, decidedDaysAgo: 37 }
+  );
+
+  console.log(
+    `Created ${countRows(schema.refundRequests)} refund requests (${countRows(schema.refundRequests, eq(schema.refundRequests.status, RefundRequestStatus.Open))} open) and ${countRows(schema.refunds)} refund.`
+  );
+
   // ─── Flush watch events ───
   // Batched: the heartbeat makes these by far the largest table, and one
   // statement per row would dominate the seed's runtime.
@@ -2826,6 +3015,9 @@ This course is still in draft while the cluster examples are rewritten against t
   );
   console.log(
     `  Teams: ${countRows(schema.teams)}, coupons: ${countRows(schema.coupons)} (${countRows(schema.coupons, isNotNull(schema.coupons.redeemedByUserId))} redeemed)`
+  );
+  console.log(
+    `  Refund requests: ${countRows(schema.refundRequests)} (${countRows(schema.refundRequests, eq(schema.refundRequests.status, RefundRequestStatus.Open))} open), refunds: ${countRows(schema.refunds)}`
   );
 }
 
