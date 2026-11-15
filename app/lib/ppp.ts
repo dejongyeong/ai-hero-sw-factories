@@ -34,6 +34,7 @@ export function getDiscountForCountry(countryCode: string | null): number {
 
 export function calculatePppPrice(priceInCents: number, countryCode: string | null): number {
   const discount = getDiscountForCountry(countryCode);
+  // Money is integer cents: work the discount out in cents and round once, here, at the point of sale.
   return Math.round(priceInCents * (1 - discount));
 }
 

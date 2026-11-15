@@ -18,13 +18,17 @@ That's it. An ADR can be a single paragraph. The value is in recording *that* a 
 
 Only include these when they add genuine value. Most ADRs won't need them.
 
-- **Status** frontmatter (`proposed | accepted | deprecated | superseded by ADR-NNNN`): useful when decisions are revisited
+- **Status** frontmatter (`proposed | accepted`): useful while a decision is still being settled
 - **Considered Options**: only when the rejected alternatives are worth remembering
 - **Consequences**: only when non-obvious downstream effects need to be called out
 
+## When a decision is reversed
+
+Delete its ADR. Do not leave it in `docs/adr/` marked deprecated or superseded: anything in that folder reads as current truth. Record the old choice, and why you backed out of it, as a rejected option under **Considered Options** in the ADR that replaces it. If nothing replaces it, delete it and let git history keep the record.
+
 ## Numbering
 
-Scan `docs/adr/` for the highest existing number and increment by one.
+Scan `docs/adr/` for the highest existing number and increment by one. Never renumber: gaps left by deleted ADRs stay, because code and commits link to ADRs by number.
 
 ## When to offer an ADR
 
