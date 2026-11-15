@@ -1,7 +1,7 @@
 import { RefundRequestStatus } from "~/db/schema";
 import { formatPrice } from "~/lib/utils";
 
-// The limits a learner must stay under to raise a Refund Request. A Platform
+// The limits a Student must stay under to raise a Refund Request. A Platform
 // Admin sees them again when deciding, because Progress keeps growing while a
 // Refund Request is Open. See docs/adr/0002-progress-outlives-enrollment.md.
 export const REFUND_WINDOW_DAYS = 14;
@@ -16,24 +16,49 @@ export type RefundProgress = {
   secondsWatched: number;
 };
 
+/** Has this Student reached the Completion Limit? Reaching it counts. */
+export function reachedCompletionLimit(progress: RefundProgress): boolean {
+  return (
+    progress.totalLessons > 0 &&
+    progress.completedLessons / progress.totalLessons >= REFUND_COMPLETION_LIMIT
+  );
+}
+
+/** Has this Student reached the Watch Limit? Reaching it counts. */
+export function reachedWatchLimit(progress: RefundProgress): boolean {
+  return progress.secondsWatched >= REFUND_WATCH_LIMIT_SECONDS;
+}
+
 /**
- * The refund limits this learner's Progress has reached. Shown to the
+ * Why a Student cannot raise a Refund Request on an Individual Purchase, or
+ * null if their Progress is under both limits. The limits never apply to a
+ * Team Purchase — its Claimed Seats decide instead.
+ */
+export function refundLimitBlocker(progress: RefundProgress): string | null {
+  if (reachedCompletionLimit(progress)) {
+    return "You have completed too much of this course to get a refund.";
+  }
+  if (reachedWatchLimit(progress)) {
+    return "You have watched too much of this course to get a refund.";
+  }
+  return null;
+}
+
+/**
+ * The refund limits this Student's Progress has reached. Shown to the
  * Platform Admin as warnings — they never block a decision, because the
  * Refund Request was valid when it was raised.
  */
 export function refundLimitWarnings(progress: RefundProgress): string[] {
   const warnings: string[] = [];
 
-  if (
-    progress.totalLessons > 0 &&
-    progress.completedLessons / progress.totalLessons >= REFUND_COMPLETION_LIMIT
-  ) {
+  if (reachedCompletionLimit(progress)) {
     warnings.push(
       `Completed at least ${REFUND_COMPLETION_LIMIT * 100}% of the lessons.`
     );
   }
 
-  if (progress.secondsWatched >= REFUND_WATCH_LIMIT_SECONDS) {
+  if (reachedWatchLimit(progress)) {
     warnings.push(
       `Watched at least ${REFUND_WATCH_LIMIT_SECONDS / 3600} hours of video.`
     );

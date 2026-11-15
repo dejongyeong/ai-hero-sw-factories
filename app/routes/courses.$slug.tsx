@@ -17,7 +17,6 @@ import {
   purchases,
   coupons,
   refundRequests,
-  videoWatchEvents,
   LessonProgressStatus,
   RefundRequestStatus,
 } from "~/db/schema";
@@ -56,6 +55,11 @@ import {
 import { parseFormData } from "~/lib/validation";
 import { MAX_RATING, MIN_RATING } from "~/lib/ratings";
 import { StarRating, StarRatingInput } from "~/components/star-rating";
+import { REFUND_WINDOW_DAYS, refundLimitBlocker } from "~/lib/refund-decisions";
+import {
+  getPurchaseKind,
+  getRefundProgress,
+} from "~/lib/refund-progress.server";
 
 function getCourseBySlug(slug: string) {
   return db.select().from(courses).where(eq(courses.slug, slug)).get();
@@ -366,10 +370,6 @@ function rateCourse(userId: number, courseId: number, rating: number) {
     .get();
 }
 
-const REFUND_WINDOW_DAYS = 14;
-const REFUND_WATCH_LIMIT_SECONDS = 2 * 60 * 60;
-const REFUND_COMPLETION_LIMIT = 0.5;
-
 function getPurchaseForCourse(userId: number, courseId: number) {
   return db
     .select()
@@ -380,7 +380,7 @@ function getPurchaseForCourse(userId: number, courseId: number) {
 }
 
 // An Open Refund Request is still being decided, and an Approved one ends the
-// Purchase's refund story — either way the learner cannot raise another.
+// Purchase's refund story — either way the Student cannot raise another.
 // A Declined Refund Request does not block a new one.
 function getBlockingRefundRequest(purchaseId: number) {
   return db
@@ -398,44 +398,6 @@ function getBlockingRefundRequest(purchaseId: number) {
     .get();
 }
 
-function getCompletedLessonCount(userId: number, lessonIds: number[]) {
-  if (lessonIds.length === 0) return 0;
-
-  const result = db
-    .select({ count: sql<number>`count(*)` })
-    .from(lessonProgress)
-    .where(
-      and(
-        eq(lessonProgress.userId, userId),
-        eq(lessonProgress.status, LessonProgressStatus.Completed),
-        inArray(lessonProgress.lessonId, lessonIds)
-      )
-    )
-    .get();
-
-  return result?.count ?? 0;
-}
-
-function getSecondsWatched(userId: number, lessonIds: number[]) {
-  if (lessonIds.length === 0) return 0;
-
-  const furthestPerLesson = db
-    .select({
-      furthest: sql<number>`max(${videoWatchEvents.positionSeconds})`,
-    })
-    .from(videoWatchEvents)
-    .where(
-      and(
-        eq(videoWatchEvents.userId, userId),
-        inArray(videoWatchEvents.lessonId, lessonIds)
-      )
-    )
-    .groupBy(videoWatchEvents.lessonId)
-    .all();
-
-  return furthestPerLesson.reduce((total, row) => total + row.furthest, 0);
-}
-
 // Compare whole days, not hours — a purchase at 23:00 should still get its
 // full fourteenth day.
 function asDayString(when: Date) {
@@ -446,7 +408,7 @@ function asDayString(when: Date) {
 }
 
 /**
- * What the learner would get back if they raised a Refund Request, or null if
+ * What the Student would get back if they raised a Refund Request, or null if
  * they cannot raise one on this purchase.
  */
 function getRefundOffer(userId: number, course: { id: number }) {
@@ -465,16 +427,12 @@ function getRefundOffer(userId: number, course: { id: number }) {
 
   if (!isWithinWindow) return null;
 
-  const lessonIds = getCourseLessonIds(course.id);
-
-  if (lessonIds.length > 0) {
-    const completedCount = getCompletedLessonCount(userId, lessonIds);
-    if (completedCount / lessonIds.length >= REFUND_COMPLETION_LIMIT) {
-      return null;
-    }
-  }
-
-  if (getSecondsWatched(userId, lessonIds) >= REFUND_WATCH_LIMIT_SECONDS) {
+  // The Watch Limit and Completion Limit apply only to an Individual
+  // Purchase; a Team Purchase is decided by its Claimed Seats below.
+  if (
+    getPurchaseKind(purchase.id) === "individual" &&
+    refundLimitBlocker(getRefundProgress(userId, course.id))
+  ) {
     return null;
   }
 
@@ -488,7 +446,7 @@ function getRefundOffer(userId: number, course: { id: number }) {
 
   if (claimedSeat) return null;
 
-  // A Refund is always the full amount the learner paid.
+  // A Refund is always the full amount the Student paid.
   return { amount: purchase.amountPaid, lastDayInWindow };
 }
 

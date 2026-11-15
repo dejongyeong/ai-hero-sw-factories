@@ -235,7 +235,7 @@ export const purchases = sqliteTable(
   (table) => [index("purchases_course_idx").on(table.courseId)]
 );
 
-// A learner's ask, with their reason, to get back what they paid. A Purchase
+// A Student's ask, with their reason, to get back what they paid. A Purchase
 // can have several over time, but at most one Open at once.
 export const refundRequests = sqliteTable(
   "refund_requests",
@@ -248,7 +248,7 @@ export const refundRequests = sqliteTable(
       .notNull()
       .$type<RefundRequestStatus>()
       .default(RefundRequestStatus.Open),
-    // The learner's own words, in the box on the course page.
+    // The Student's own words, in the box on the course page.
     reason: text("reason").notNull(),
     requestedAt: text("requested_at")
       .notNull()

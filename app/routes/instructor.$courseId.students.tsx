@@ -46,11 +46,11 @@ function getCourseEnrolledStudents(courseId: number) {
 }
 
 /**
- * Lapsed Learners: their Enrollment ended when a Refund Request on their
+ * Lapsed Students: their Enrollment ended when a Refund Request on their
  * Individual Purchase of this course was approved. Only the latest one per
- * learner, and not anyone who has since bought the course again.
+ * Student, and not anyone who has since bought the course again.
  */
-function getCourseLapsedLearners(courseId: number, enrolledUserIds: Set<number>) {
+function getCourseLapsedStudents(courseId: number, enrolledUserIds: Set<number>) {
   const rows = db
     .select({
       userId: purchases.userId,
@@ -264,9 +264,9 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     }
   }
 
-  // Lapsed Learners stay on the roster: their Progress is kept even though
+  // Lapsed Students stay on the roster: their Progress is kept even though
   // their Enrollment has ended.
-  const lapsedLearners = getCourseLapsedLearners(
+  const lapsedStudents = getCourseLapsedStudents(
     courseId,
     new Set(enrolledStudents.map((enrollment) => enrollment.userId))
   );
@@ -278,7 +278,7 @@ export async function loader({ params, request }: Route.LoaderArgs) {
       completedAt: enrollment.completedAt,
       lapsedAt: null,
     })),
-    ...lapsedLearners.map((lapsed) => ({
+    ...lapsedStudents.map((lapsed) => ({
       userId: lapsed.userId,
       // The Enrollment is gone; an Individual Purchase enrolls on the day of
       // purchase, so that is when they were enrolled.
@@ -321,7 +321,7 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     course,
     students,
     enrolledCount: enrolledStudents.length,
-    lapsedCount: lapsedLearners.length,
+    lapsedCount: lapsedStudents.length,
     quizCount: lessonQuizzes.length,
   };
 }

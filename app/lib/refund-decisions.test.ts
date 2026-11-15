@@ -4,12 +4,13 @@ import {
   approvalBlocker,
   buildRefundDecisionEmail,
   declineBlocker,
+  refundLimitBlocker,
   refundLimitWarnings,
   type DecisionContext,
 } from "./refund-decisions";
 
 const PLATFORM_ADMIN = 1;
-const LEARNER = 2;
+const STUDENT = 2;
 
 function openIndividualRequest(
   overrides: Partial<DecisionContext> = {}
@@ -17,7 +18,7 @@ function openIndividualRequest(
   return {
     status: RefundRequestStatus.Open,
     deciderUserId: PLATFORM_ADMIN,
-    buyerUserId: LEARNER,
+    buyerUserId: STUDENT,
     purchaseKind: "individual",
     claimedSeatCount: 0,
     ...overrides,
@@ -25,7 +26,7 @@ function openIndividualRequest(
 }
 
 describe("refundLimitWarnings", () => {
-  it("has nothing to say about a learner well under both limits", () => {
+  it("has nothing to say about a Student well under both limits", () => {
     expect(
       refundLimitWarnings({
         completedLessons: 1,
@@ -63,6 +64,48 @@ describe("refundLimitWarnings", () => {
         secondsWatched: 0,
       })
     ).toEqual([]);
+  });
+});
+
+describe("refundLimitBlocker", () => {
+  it("lets a Student under both limits raise a Refund Request", () => {
+    expect(
+      refundLimitBlocker({
+        completedLessons: 4,
+        totalLessons: 10,
+        secondsWatched: 2 * 60 * 60 - 1,
+      })
+    ).toBeNull();
+  });
+
+  it("turns away a Student who has completed exactly half the lessons", () => {
+    expect(
+      refundLimitBlocker({
+        completedLessons: 5,
+        totalLessons: 10,
+        secondsWatched: 0,
+      })
+    ).toMatch(/completed too much/);
+  });
+
+  it("turns away a Student who has Watched exactly two hours", () => {
+    expect(
+      refundLimitBlocker({
+        completedLessons: 0,
+        totalLessons: 10,
+        secondsWatched: 2 * 60 * 60,
+      })
+    ).toMatch(/watched too much/);
+  });
+
+  it("never blocks on a course with no lessons", () => {
+    expect(
+      refundLimitBlocker({
+        completedLessons: 0,
+        totalLessons: 0,
+        secondsWatched: 0,
+      })
+    ).toBeNull();
   });
 });
 
@@ -127,7 +170,7 @@ describe("buildRefundDecisionEmail", () => {
     amount: 7900,
   };
 
-  it("tells an approved learner the amount and that access has ended", () => {
+  it("tells an approved Student the amount and that access has ended", () => {
     const email = buildRefundDecisionEmail({
       ...base,
       decision: RefundRequestStatus.Approved,
@@ -148,7 +191,7 @@ describe("buildRefundDecisionEmail", () => {
     expect(email.body).toContain("seat codes");
   });
 
-  it("tells a declined learner they keep access", () => {
+  it("tells a declined Student they keep access", () => {
     const email = buildRefundDecisionEmail({
       ...base,
       decision: RefundRequestStatus.Declined,

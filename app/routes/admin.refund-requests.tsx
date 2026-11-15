@@ -2,7 +2,7 @@ import { useEffect } from "react";
 import { data, isRouteErrorResponse, Link, useFetcher } from "react-router";
 import { toast } from "sonner";
 import { z } from "zod";
-import { and, count, desc, eq, inArray, isNotNull, sql } from "drizzle-orm";
+import { and, count, desc, eq, isNotNull, sql } from "drizzle-orm";
 import type { Route } from "./+types/admin.refund-requests";
 import { getCurrentUserId } from "~/lib/session";
 import { parseFormData } from "~/lib/validation";
@@ -15,23 +15,20 @@ import {
   declineBlocker,
   refundLimitWarnings,
   type DecisionContext,
-  type PurchaseKind,
-  type RefundProgress,
 } from "~/lib/refund-decisions";
+import {
+  getPurchaseKind,
+  getRefundProgress,
+} from "~/lib/refund-progress.server";
 import { db } from "~/db";
 import {
   coupons,
   courses,
   enrollments,
-  lessonProgress,
-  lessons,
-  modules,
   purchases,
   refundRequests,
   refunds,
   users,
-  videoWatchEvents,
-  LessonProgressStatus,
   RefundRequestStatus,
   UserRole,
 } from "~/db/schema";
@@ -125,65 +122,6 @@ function getSeatCounts(purchaseId: number) {
   return { total: result?.total ?? 0, claimed: result?.claimed ?? 0 };
 }
 
-function purchaseKindFor(seatTotal: number): PurchaseKind {
-  // Only a Team Purchase has Seats.
-  return seatTotal > 0 ? "team" : "individual";
-}
-
-function getLessonIdsForCourse(courseId: number): number[] {
-  return db
-    .select({ id: lessons.id })
-    .from(lessons)
-    .innerJoin(modules, eq(lessons.moduleId, modules.id))
-    .where(eq(modules.courseId, courseId))
-    .all()
-    .map((row) => row.id);
-}
-
-function getProgress(userId: number, courseId: number): RefundProgress {
-  const lessonIds = getLessonIdsForCourse(courseId);
-  if (lessonIds.length === 0) {
-    return { completedLessons: 0, totalLessons: 0, secondsWatched: 0 };
-  }
-
-  const completed = db
-    .select({ total: count() })
-    .from(lessonProgress)
-    .where(
-      and(
-        eq(lessonProgress.userId, userId),
-        eq(lessonProgress.status, LessonProgressStatus.Completed),
-        inArray(lessonProgress.lessonId, lessonIds)
-      )
-    )
-    .get();
-
-  // The furthest point reached in each lesson's video, summed — the same
-  // measure the refund limit uses on the course page.
-  const furthestPerLesson = db
-    .select({
-      furthest: sql<number>`max(${videoWatchEvents.positionSeconds})`,
-    })
-    .from(videoWatchEvents)
-    .where(
-      and(
-        eq(videoWatchEvents.userId, userId),
-        inArray(videoWatchEvents.lessonId, lessonIds)
-      )
-    )
-    .groupBy(videoWatchEvents.lessonId)
-    .all();
-
-  return {
-    completedLessons: completed?.total ?? 0,
-    totalLessons: lessonIds.length,
-    secondsWatched: furthestPerLesson.reduce(
-      (total, row) => total + row.furthest,
-      0
-    ),
-  };
-}
-
 // ─── Loader ───
 
 const statusFilterSchema = z
@@ -205,13 +143,13 @@ export async function loader({ request, url }: Route.LoaderArgs) {
 
   const rows = getRefundRequests(status).map((row) => {
     const seats = getSeatCounts(row.purchaseId);
-    const purchaseKind = purchaseKindFor(seats.total);
+    const purchaseKind = getPurchaseKind(row.purchaseId);
 
     // A Team Admin is not enrolled by their Team Purchase, so their own
     // Progress says nothing about it.
     const progress =
       purchaseKind === "individual"
-        ? getProgress(row.buyerUserId, row.courseId)
+        ? getRefundProgress(row.buyerUserId, row.courseId)
         : null;
 
     const context: DecisionContext = {
@@ -264,7 +202,7 @@ export async function action({ request }: Route.ActionArgs) {
   }
 
   const seats = getSeatCounts(refundRequest.purchaseId);
-  const purchaseKind = purchaseKindFor(seats.total);
+  const purchaseKind = getPurchaseKind(refundRequest.purchaseId);
   const context: DecisionContext = {
     status: refundRequest.status,
     deciderUserId: platformAdmin.id,
@@ -339,7 +277,7 @@ export async function action({ request }: Route.ActionArgs) {
       })
       .run();
 
-    // The Enrollment ends now; the learner's Progress is kept.
+    // The Enrollment ends now; the Student's Progress is kept.
     // See docs/adr/0001-enrollment-ends-at-approval.md. A Team Admin is not
     // enrolled by a Team Purchase, so there is nothing to end for one — its
     // Unclaimed Seats are refused at Claim time instead.
@@ -580,7 +518,7 @@ export default function AdminRefundRequests({
       <div className="mb-6">
         <h1 className="text-3xl font-bold">Refund Requests</h1>
         <p className="mt-1 text-muted-foreground">
-          Approve or decline what learners have asked to get back
+          Approve or decline what students have asked to get back
         </p>
       </div>
 

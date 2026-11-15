@@ -6,20 +6,23 @@ import { db } from "~/db";
 import {
   courses,
   coupons,
-  lessons,
-  modules,
   purchases,
   refundRequests,
   users,
-  videoWatchEvents,
   RefundRequestStatus,
 } from "~/db/schema";
-import { and, eq, inArray, isNotNull, sql } from "drizzle-orm";
+import { and, eq, isNotNull, sql } from "drizzle-orm";
 import { parseFormData, parseParams } from "~/lib/validation";
 import { formatPrice } from "~/lib/utils";
+import {
+  REFUND_WINDOW_DAYS,
+  refundLimitBlocker,
+} from "~/lib/refund-decisions";
+import {
+  getPurchaseKind,
+  getRefundProgress,
+} from "~/lib/refund-progress.server";
 
-const REFUND_WINDOW_DAYS = 14;
-const MAX_WATCHED_HOURS = 2;
 
 const refundParamsSchema = z.object({
   slug: z.string().min(1),
@@ -44,17 +47,6 @@ function getLatestPurchase(userId: number, courseId: number) {
     .where(and(eq(purchases.userId, userId), eq(purchases.courseId, courseId)))
     .orderBy(sql`${purchases.createdAt} desc`)
     .get();
-}
-
-function getLessonIdsForCourse(courseId: number): number[] {
-  const rows = db
-    .select({ id: lessons.id })
-    .from(lessons)
-    .innerJoin(modules, eq(lessons.moduleId, modules.id))
-    .where(eq(modules.courseId, courseId))
-    .all();
-
-  return rows.map((row) => row.id);
 }
 
 function getRefundRequestWithStatus(
@@ -88,20 +80,20 @@ function lastDayOfWindow(purchasedAtIso: string): string {
 }
 
 /**
- * The confirmation the learner gets in their inbox. There is no mail
+ * The confirmation the Student gets in their inbox. There is no mail
  * transport wired up yet, so the built message goes to the server log.
  */
 function buildRefundRequestEmail(input: {
-  learnerName: string;
-  learnerEmail: string;
+  studentName: string;
+  studentEmail: string;
   courseTitle: string;
   amount: number;
 }) {
   return {
-    to: input.learnerEmail,
+    to: input.studentEmail,
     subject: `Refund requested — ${input.courseTitle}`,
     body: [
-      `Hi ${input.learnerName},`,
+      `Hi ${input.studentName},`,
       "",
       `We have your refund request for "${input.courseTitle}".`,
       `If it is approved, your refund will be ${formatPrice(input.amount)}, the full amount you paid.`,
@@ -127,13 +119,13 @@ export async function action({ params, request }: Route.ActionArgs) {
     throw data("Course not found", { status: 404 });
   }
 
-  const learner = db
+  const student = db
     .select()
     .from(users)
     .where(eq(users.id, currentUserId))
     .get();
 
-  if (!learner) {
+  if (!student) {
     throw data("User not found", { status: 404 });
   }
 
@@ -157,7 +149,7 @@ export async function action({ params, request }: Route.ActionArgs) {
   }
 
   // A seat that came out of a team licence, and has been claimed, belongs to
-  // the team — the learner cannot hand it back on their own.
+  // the team — the Student cannot hand it back on their own.
   const claimedSeat = db
     .select({ id: coupons.id })
     .from(coupons)
@@ -179,37 +171,19 @@ export async function action({ params, request }: Route.ActionArgs) {
     });
   }
 
-  const courseLessonIds = getLessonIdsForCourse(course.id);
-
-  let watchedSeconds = 0;
-  if (courseLessonIds.length > 0) {
-    const furthestPerLesson = db
-      .select({
-        furthest: sql<number>`max(${videoWatchEvents.positionSeconds})`,
-      })
-      .from(videoWatchEvents)
-      .where(
-        and(
-          eq(videoWatchEvents.userId, currentUserId),
-          inArray(videoWatchEvents.lessonId, courseLessonIds)
-        )
-      )
-      .groupBy(videoWatchEvents.lessonId)
-      .all();
-
-    watchedSeconds = furthestPerLesson.reduce(
-      (total, row) => total + row.furthest,
-      0
+  // The Watch Limit and Completion Limit apply only to an Individual
+  // Purchase. A Team Admin is not enrolled by a Team Purchase, so their own
+  // Progress says nothing about it — its Claimed Seats decide instead.
+  if (getPurchaseKind(purchase.id) === "individual") {
+    const limitBlocker = refundLimitBlocker(
+      getRefundProgress(currentUserId, course.id)
     );
+    if (limitBlocker) {
+      throw data(limitBlocker, { status: 403 });
+    }
   }
 
-  if (watchedSeconds >= MAX_WATCHED_HOURS * 60 * 60) {
-    throw data("You have watched too much of this course to get a refund.", {
-      status: 403,
-    });
-  }
-
-  // A Refund is always the full amount the learner paid.
+  // A Refund is always the full amount the Student paid.
   const refundableAmount = purchase.amountPaid;
 
   const formData = await request.formData();
@@ -230,8 +204,8 @@ export async function action({ params, request }: Route.ActionArgs) {
     .get();
 
   const email = buildRefundRequestEmail({
-    learnerName: learner.name,
-    learnerEmail: learner.email,
+    studentName: student.name,
+    studentEmail: student.email,
     courseTitle: course.title,
     amount: refundableAmount,
   });
