@@ -52,6 +52,10 @@ A Seat that no one has Claimed yet. Once its Team Purchase is refunded, it can n
 A learner's access to a course's content. It ends when a Refund Request on their Purchase is approved, and a new Purchase starts a new one.
 _Avoid_: Access (on its own), Subscription, Seat
 
+**Lapsed Learner**:
+A learner whose Enrollment in a course ended because their Refund Request was approved. They stay on the course's roster with their Progress, and are no longer Lapsed once they buy the course again.
+_Avoid_: Refunded student, Cancelled, Inactive, Unenrolled
+
 **Progress**:
 Everything a learner has done in a course: lessons completed, video watched and quiz attempts. It belongs to the learner, not the Enrollment, so it outlives an Enrollment that ends and picks up again if they buy the course again.
 _Avoid_: Completion (for the whole record)

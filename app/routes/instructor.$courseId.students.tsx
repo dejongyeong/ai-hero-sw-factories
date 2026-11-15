@@ -16,9 +16,13 @@ import {
   quizzes,
   quizAttempts,
   lessonProgress,
+  purchases,
+  refundRequests,
+  coupons,
   LessonProgressStatus,
+  RefundRequestStatus,
 } from "~/db/schema";
-import { eq, and, or, sql, desc } from "drizzle-orm";
+import { eq, and, or, sql, desc, notExists } from "drizzle-orm";
 
 function getUserById(id: number) {
   return db.select().from(users).where(eq(users.id, id)).get();
@@ -39,6 +43,44 @@ function getCourseEnrolledStudents(courseId: number) {
     .from(enrollments)
     .where(eq(enrollments.courseId, courseId))
     .all();
+}
+
+/**
+ * Lapsed Learners: their Enrollment ended when a Refund Request on their
+ * Individual Purchase of this course was approved. Only the latest one per
+ * learner, and not anyone who has since bought the course again.
+ */
+function getCourseLapsedLearners(courseId: number, enrolledUserIds: Set<number>) {
+  const rows = db
+    .select({
+      userId: purchases.userId,
+      purchasedAt: purchases.createdAt,
+      lapsedAt: refundRequests.decidedAt,
+    })
+    .from(refundRequests)
+    .innerJoin(purchases, eq(refundRequests.purchaseId, purchases.id))
+    .where(
+      and(
+        eq(purchases.courseId, courseId),
+        eq(refundRequests.status, RefundRequestStatus.Approved),
+        // A Team Purchase never enrolled its buyer, so it has no one to lapse.
+        notExists(
+          db
+            .select({ id: coupons.id })
+            .from(coupons)
+            .where(eq(coupons.purchaseId, purchases.id))
+        )
+      )
+    )
+    .orderBy(desc(refundRequests.decidedAt))
+    .all();
+
+  const latestByUser = new Map<number, (typeof rows)[number]>();
+  for (const row of rows) {
+    if (enrolledUserIds.has(row.userId)) continue;
+    if (!latestByUser.has(row.userId)) latestByUser.set(row.userId, row);
+  }
+  return [...latestByUser.values()];
 }
 
 function getQuizByLessonId(lessonId: number) {
@@ -222,14 +264,38 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     }
   }
 
+  // Lapsed Learners stay on the roster: their Progress is kept even though
+  // their Enrollment has ended.
+  const lapsedLearners = getCourseLapsedLearners(
+    courseId,
+    new Set(enrolledStudents.map((enrollment) => enrollment.userId))
+  );
+
+  const rosterEntries = [
+    ...enrolledStudents.map((enrollment) => ({
+      userId: enrollment.userId,
+      enrolledAt: enrollment.enrolledAt,
+      completedAt: enrollment.completedAt,
+      lapsedAt: null,
+    })),
+    ...lapsedLearners.map((lapsed) => ({
+      userId: lapsed.userId,
+      // The Enrollment is gone; an Individual Purchase enrolls on the day of
+      // purchase, so that is when they were enrolled.
+      enrolledAt: lapsed.purchasedAt,
+      completedAt: null,
+      lapsedAt: lapsed.lapsedAt,
+    })),
+  ];
+
   // Build student data with progress and quiz scores
-  const students = enrolledStudents.map((enrollment) => {
-    const studentUser = getUserById(enrollment.userId);
-    const progress = calculateProgress(enrollment.userId, courseId, false);
+  const students = rosterEntries.map((entry) => {
+    const studentUser = getUserById(entry.userId);
+    const progress = calculateProgress(entry.userId, courseId, false);
 
     // Get best quiz attempt for each quiz in this course
     const quizScores = lessonQuizzes.map((lq) => {
-      const bestAttempt = getBestAttempt(enrollment.userId, lq.quizId);
+      const bestAttempt = getBestAttempt(entry.userId, lq.quizId);
       return {
         quizId: lq.quizId,
         quizTitle: lq.quizTitle,
@@ -240,17 +306,24 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     });
 
     return {
-      userId: enrollment.userId,
+      userId: entry.userId,
       name: studentUser?.name ?? "Unknown",
       email: studentUser?.email ?? "",
-      enrolledAt: enrollment.enrolledAt,
-      completedAt: enrollment.completedAt,
+      enrolledAt: entry.enrolledAt,
+      completedAt: entry.completedAt,
+      lapsed: entry.lapsedAt !== null,
       progress,
       quizScores,
     };
   });
 
-  return { course, students, quizCount: lessonQuizzes.length };
+  return {
+    course,
+    students,
+    enrolledCount: enrolledStudents.length,
+    lapsedCount: lapsedLearners.length,
+    quizCount: lessonQuizzes.length,
+  };
 }
 
 function progressBar(progress: number) {
@@ -292,7 +365,8 @@ function quizScoreBadge(score: number | null, passed: boolean | null) {
 export default function InstructorStudentRoster({
   loaderData,
 }: Route.ComponentProps) {
-  const { course, students, quizCount } = loaderData;
+  const { course, students, enrolledCount, lapsedCount, quizCount } =
+    loaderData;
 
   return (
     <div className="mx-auto max-w-7xl p-6 lg:p-8">
@@ -327,8 +401,9 @@ export default function InstructorStudentRoster({
       <div className="mb-4 flex items-center gap-4 text-sm text-muted-foreground">
         <span className="flex items-center gap-1.5">
           <Users className="size-4" />
-          {students.length} {students.length === 1 ? "student" : "students"}{" "}
+          {enrolledCount} {enrolledCount === 1 ? "student" : "students"}{" "}
           enrolled
+          {lapsedCount > 0 && ` · ${lapsedCount} lapsed`}
         </span>
         {quizCount > 0 && (
           <span className="flex items-center gap-1.5">
@@ -405,7 +480,14 @@ export default function InstructorStudentRoster({
                           {progressBar(student.progress)}
                         </td>
                         <td className="px-4 py-3">
-                          {student.completedAt ? (
+                          {student.lapsed ? (
+                            <span
+                              className="inline-flex items-center rounded-full bg-amber-100 px-2.5 py-0.5 text-xs font-medium text-amber-800 dark:bg-amber-900/30 dark:text-amber-400"
+                              title="Their refund was approved, so they no longer have access. Their progress is kept."
+                            >
+                              Lapsed
+                            </span>
+                          ) : student.completedAt ? (
                             <span className="inline-flex items-center rounded-full bg-green-100 px-2.5 py-0.5 text-xs font-medium text-green-800 dark:bg-green-900/30 dark:text-green-400">
                               Completed
                             </span>
