@@ -110,3 +110,35 @@ _Avoid_: Watch cap, Viewing threshold
 **Completion Limit**:
 A Student can raise a Refund Request on an Individual Purchase only while they have completed under half of the course's lessons, with or without video, counted against the course as it is now. It never stops a Platform Admin approving one.
 _Avoid_: Completion cap
+
+### Discussion
+
+**Comment**:
+Anything posted in a lesson's discussion: a Question, a Reply, or a top-level post by the course's Instructor or a Platform Admin.
+_Avoid_: Post, Message
+
+**Question**:
+A top-level Comment on a lesson by anyone other than the course's Instructor or a Platform Admin. The course's Instructor gets a Notification for each one; Platform Admins can answer it but are not notified.
+_Avoid_: Comment (on its own), Thread, Post, Top-level comment
+
+**Reply**:
+A Comment posted directly under a top-level Comment. A Reply cannot itself be replied to. Whoever asked a Question gets a Notification for every Reply to it, whoever wrote the Reply.
+_Avoid_: Answer, Response, Child comment
+
+**Answered Question**:
+A Question with a Reply from the course's Instructor or a Platform Admin that hasn't been deleted. A Student's Reply never answers it.
+_Avoid_: Resolved, Closed
+
+**Unanswered Question**:
+A Question with no such Reply, including one whose only staff Reply has been deleted.
+_Avoid_: Open, Pending
+
+### Notifications
+
+**Notification**:
+A message Cadence sends a person to tell them something happened that concerns them, such as a decision on their Refund Request.
+_Avoid_: Alert, Message, Activity
+
+**Notification Feed**:
+The list of a person's Notifications, read inside Cadence.
+_Avoid_: Inbox, Notification centre, Activity feed
