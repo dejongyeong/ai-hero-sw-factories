@@ -46,7 +46,11 @@ export async function loader({ request }: Route.LoaderArgs) {
   const user = await currentUser(request);
   const knockId = `cadence-${user.id}`;
   // Identify (upsert) the user so Knock has a name and email to send to.
-  await knock().users.update(knockId, { name: user.name, email: user.email });
+  // Every Cadence user gets the one KNOCK_TEST_EMAIL (your own Knock account
+  // address), never the seeded email: the Knock test channel only delivers to
+  // account members. Unset → no email at all, so nothing goes to seed addresses.
+  const testEmail = process.env.KNOCK_TEST_EMAIL?.trim() || null;
+  await knock().users.update(knockId, { name: user.name, email: testEmail });
   const userToken = await signUserToken(knockId, {
     signingKey: process.env.KNOCK_SIGNING_KEY,
     expiresInSeconds: 3600,
@@ -55,7 +59,7 @@ export async function loader({ request }: Route.LoaderArgs) {
     .users.getPreferences(knockId, "default")
     .catch((e: Error) => ({ error: e.message }));
   return {
-    user: { name: user.name, email: user.email, knockId },
+    user: { name: user.name, knockId, testEmail },
     userToken,
     publicKey: process.env.KNOCK_PUBLIC_API_KEY!,
     feedId: process.env.KNOCK_FEED_CHANNEL_ID!,
@@ -73,16 +77,12 @@ export async function action({ request }: Route.ActionArgs) {
   try {
     if (intent === "trigger") {
       const sandbox = form.get("sandbox") === "on";
-      const emailOverride = String(form.get("email") ?? "").trim();
-      if (emailOverride) {
-        await knock().users.update(knockId, { email: emailOverride });
-      }
       const result = await knock().workflows.trigger(WORKFLOW, {
         recipients: [knockId],
         data: { message: `Prototype ping at ${startedAt}` },
         ...(sandbox ? { settings: { sandbox_mode: true } } : {}),
       } as never);
-      return { intent, startedAt, sandbox, emailOverride, result };
+      return { intent, startedAt, sandbox, result };
     }
     if (intent === "setPreference") {
       const enabled = form.get("enabled") === "true";
@@ -123,7 +123,12 @@ export default function KnockPrototype({ loaderData }: Route.ComponentProps) {
       <div className="rounded border-2 border-dashed border-amber-500 bg-amber-50 p-3 text-sm text-amber-900">
         PROTOTYPE: Try Knock in Cadence. Signed in to Knock as{" "}
         <code>{user.knockId}</code> ({user.name}). Workflow:{" "}
-        <code>{workflow}</code>
+        <code>{workflow}</code>. Emails go to:{" "}
+        {user.testEmail ? (
+          <code>{user.testEmail}</code>
+        ) : (
+          <strong>nobody (KNOCK_TEST_EMAIL not set in .env)</strong>
+        )}
       </div>
 
       <KnockProvider apiKey={publicKey} user={{ id: user.knockId }} userToken={userToken}>
@@ -163,11 +168,6 @@ export default function KnockPrototype({ loaderData }: Route.ComponentProps) {
           <label className="flex items-center gap-1 text-sm">
             <input type="checkbox" name="sandbox" /> sandbox_mode on this run
           </label>
-          <input
-            name="email"
-            placeholder="override email (for Postmark check)"
-            className="rounded border px-2 py-1 text-sm"
-          />
           <button className="rounded bg-black px-3 py-1 text-white">
             Trigger
           </button>
