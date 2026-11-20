@@ -3,6 +3,12 @@ import type { Route } from "./+types/layout.app";
 import { Sidebar } from "~/components/sidebar";
 import { DevUI } from "~/components/dev-ui";
 import { Toaster } from "sonner";
+// PROTOTYPE — notification-feed
+import { knockSession } from "~/lib/prototype-feed.server";
+import {
+  PrototypeFeedProvider,
+  PrototypeSwitcher,
+} from "~/components/prototype-notification-feed";
 import { getCurrentUserId, getDevCountry } from "~/lib/session";
 import { getCountryTierInfo, COUNTRIES } from "~/lib/ppp";
 import { eq, and, or, sql, desc } from "drizzle-orm";
@@ -213,6 +219,10 @@ export async function loader({ request }: Route.LoaderArgs) {
     countryTierInfo,
     countries: COUNTRIES,
     isTeamAdmin: currentUserId ? isTeamAdmin(currentUserId) : false,
+    // PROTOTYPE — notification-feed
+    knock: currentUser
+      ? await knockSession(currentUser.id, currentUser.name)
+      : null,
   };
 }
 
@@ -225,9 +235,11 @@ export default function AppLayout({ loaderData }: Route.ComponentProps) {
     countryTierInfo,
     countries,
     isTeamAdmin: userIsTeamAdmin,
+    knock,
   } = loaderData;
 
   return (
+    <PrototypeFeedProvider session={knock}>
     <div className="flex h-screen overflow-hidden">
       <Sidebar
         currentUser={currentUser}
@@ -245,6 +257,8 @@ export default function AppLayout({ loaderData }: Route.ComponentProps) {
         countries={countries}
       />
       <Toaster position="bottom-right" richColors closeButton />
+      {knock && <PrototypeSwitcher />}
     </div>
+    </PrototypeFeedProvider>
   );
 }

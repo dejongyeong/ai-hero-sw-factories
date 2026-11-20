@@ -19,6 +19,13 @@ import {
   Settings,
   ReceiptText,
 } from "lucide-react";
+// PROTOTYPE — notification-feed
+import {
+  useVariant,
+  VariantABell,
+  VariantBNavItem,
+  VariantCBell,
+} from "~/components/prototype-notification-feed";
 
 interface CurrentUser {
   id: number;
@@ -119,6 +126,7 @@ export function Sidebar({
   isTeamAdmin = false,
 }: SidebarProps) {
   const currentUserRole = currentUser?.role ?? null;
+  const variant = useVariant(); // PROTOTYPE
   const [isDark, setIsDark] = useState(false);
 
   useEffect(() => {
@@ -140,9 +148,15 @@ export function Sidebar({
         <NavLink to="/" className="text-lg font-bold tracking-tight">
           Cadence
         </NavLink>
+        {currentUser && variant === "A" && (
+          <div className="ml-auto">
+            <VariantABell />
+          </div>
+        )}
       </div>
 
       <nav className="flex-1 space-y-1 p-3">
+        {currentUser && variant === "B" && <VariantBNavItem />}
         {navItems
           .filter((item) => isVisible(item, currentUserRole))
           .map((item) => (
@@ -242,6 +256,7 @@ export function Sidebar({
                 {currentUser.role}
               </div>
             </div>
+            {variant === "C" && <VariantCBell />}
             <NavLink
               to="/settings"
               title="Settings"
