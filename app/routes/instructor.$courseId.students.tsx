@@ -461,7 +461,8 @@ export default function InstructorStudentRoster({
                     return (
                       <tr
                         key={student.userId}
-                        className="border-b border-border last:border-0"
+                        id={`student-${student.userId}`} /* PROTOTYPE notification-feed anchor */
+                        className="scroll-mt-6 border-b border-border last:border-0"
                       >
                         <td className="px-4 py-3">
                           <div>

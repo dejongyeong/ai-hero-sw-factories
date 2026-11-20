@@ -4,6 +4,8 @@
 //   A  Knock stock — bell + count badge in the sidebar header, Knock's own popover and cells.
 //   B  Feed page   — "Notifications" sidebar item with count pill → full /notifications page.
 //   C  Drawer      — bell with a dot in the user row → right-hand slide-over, Cadence-styled cards.
+//   D  Cadence popover — A's placement and badge, Cadence's own design, no Knock branding,
+//      category filters, infinite scroll, deep links that land on the exact record.
 import { createContext, useContext, useEffect, useRef, useState } from "react";
 import { Link, useFetcher, useLocation, useNavigate, useSearchParams } from "react-router";
 import {
@@ -41,6 +43,7 @@ export const VARIANTS = {
   A: "Knock stock popover",
   B: "Sidebar item + Feed page",
   C: "Bell + slide-over drawer",
+  D: "Cadence popover (A, redesigned)",
 } as const;
 export type Variant = keyof typeof VARIANTS;
 const KEYS = Object.keys(VARIANTS) as Variant[];
@@ -77,7 +80,10 @@ export type KnockSession = {
   userToken: string;
   publicKey: string;
   feedId: string;
+  categories: string[];
 };
+
+const SessionContext = createContext<KnockSession | null>(null);
 
 export function PrototypeFeedProvider({
   session,
@@ -92,6 +98,7 @@ export function PrototypeFeedProvider({
   }
   return (
     <VariantContext.Provider value={variant}>
+      <SessionContext.Provider value={session}>
       <KnockProvider
         apiKey={session.publicKey}
         user={{ id: session.knockId }}
@@ -102,6 +109,7 @@ export function PrototypeFeedProvider({
           {children}
         </KnockFeedProvider>
       </KnockProvider>
+      </SessionContext.Provider>
     </VariantContext.Provider>
   );
 }
@@ -173,14 +181,36 @@ function ago(iso: string) {
   return `${Math.floor(s / 86400)}d ago`;
 }
 
+/** After navigating to `/path#anchor`, scroll to the record and flash it. */
+function highlightHash(url: string) {
+  const id = url.split("#")[1];
+  if (!id) return;
+  const started = Date.now();
+  const tick = () => {
+    const el = document.getElementById(id);
+    if (!el) {
+      if (Date.now() - started < 3000) requestAnimationFrame(tick);
+      return;
+    }
+    el.scrollIntoView({ block: "center", behavior: "smooth" });
+    const cls = ["ring-2", "ring-primary", "bg-primary/10", "rounded-md", "transition-all"];
+    el.classList.add(...cls);
+    setTimeout(() => el.classList.remove(...cls), 2500);
+  };
+  tick();
+}
+
 function useOpenNotification(onDone?: () => void) {
   const { feedClient } = useKnockFeed();
   const navigate = useNavigate();
-  return (item: FeedItem) => {
+  return async (item: FeedItem) => {
     feedClient.markAsRead(item);
     onDone?.();
     const url = dataOf(item).url;
-    if (url) navigate(url);
+    if (url) {
+      await navigate(url);
+      highlightHash(url);
+    }
   };
 }
 
@@ -482,6 +512,280 @@ export function VariantCBell() {
   );
 }
 
+// ---------- Variant D: Cadence popover ----------
+
+const CATEGORY_LABEL: Record<string, string> = {
+  discussions: "Discussions",
+  refunds: "Refunds",
+  team: "Team",
+  enrollments: "Enrollments",
+};
+
+export function VariantDBell() {
+  const session = useContext(SessionContext);
+  const { feedClient: outer, metadata } = useFeed();
+  const [open, setOpen] = useState(false);
+  const [category, setCategory] = useState<string | null>(null);
+  const [unreadOnly, setUnreadOnly] = useState(false);
+  const panelRef = useRef<HTMLDivElement>(null);
+  const buttonRef = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
+    const onDown = (e: MouseEvent) => {
+      const t = e.target as Node;
+      if (!panelRef.current?.contains(t) && !buttonRef.current?.contains(t)) setOpen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    window.addEventListener("mousedown", onDown);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("mousedown", onDown);
+    };
+  }, [open]);
+
+  // The filtered list is its own feed client; refresh the badge's feed after changes.
+  const refreshBadge = () => setTimeout(() => outer.fetch(), 300);
+  const count = metadata.unread_count;
+  const chips = ["all", ...(session?.categories ?? [])];
+
+  return (
+    <>
+      <button
+        ref={buttonRef}
+        onClick={() => setOpen(!open)}
+        aria-label={`Notifications${count ? `, ${count} unread` : ""}`}
+        className={cn(
+          "relative rounded-md p-1.5 text-sidebar-foreground/70 transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
+          open && "bg-sidebar-accent text-sidebar-accent-foreground"
+        )}
+      >
+        <Bell className="size-[18px]" />
+        {count > 0 && (
+          <span className="absolute -right-1 -top-1 flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-primary px-1 text-[10px] font-semibold leading-none text-primary-foreground ring-2 ring-sidebar">
+            {count > 99 ? "99+" : count}
+          </span>
+        )}
+      </button>
+
+      {open && (
+        <div
+          ref={panelRef}
+          className="fixed left-[calc(14rem+8px)] top-2 z-40 flex max-h-[min(640px,calc(100vh-1rem))] w-[420px] flex-col overflow-hidden rounded-xl border bg-popover text-popover-foreground shadow-2xl"
+        >
+          <header className="border-b px-4 pb-2 pt-3">
+            <div className="flex items-center justify-between">
+              <h2 className="text-base font-semibold">Notifications</h2>
+              <div className="flex items-center gap-3">
+                <label className="flex cursor-pointer items-center gap-1.5 text-xs text-muted-foreground">
+                  <input
+                    type="checkbox"
+                    checked={unreadOnly}
+                    onChange={(e) => setUnreadOnly(e.target.checked)}
+                    className="accent-[var(--primary)]"
+                  />
+                  Unread only
+                </label>
+                <button
+                  title="Mark all as read"
+                  disabled={count === 0}
+                  onClick={async () => {
+                    await outer.markAllAsRead();
+                    refreshBadge();
+                  }}
+                  className="rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-30"
+                >
+                  <CheckCheck className="size-4" />
+                </button>
+              </div>
+            </div>
+            <div className="mt-2 flex gap-1 overflow-x-auto">
+              {chips.map((c) => {
+                const active = (category ?? "all") === c;
+                return (
+                  <button
+                    key={c}
+                    onClick={() => setCategory(c === "all" ? null : c)}
+                    className={cn(
+                      "rounded-full border px-2.5 py-1 text-xs font-medium transition-colors",
+                      active
+                        ? "border-primary bg-primary text-primary-foreground"
+                        : "border-border text-muted-foreground hover:bg-muted hover:text-foreground"
+                    )}
+                  >
+                    {c === "all" ? "All" : CATEGORY_LABEL[c] ?? c}
+                  </button>
+                );
+              })}
+            </div>
+          </header>
+
+          {/* Keyed so each filter gets a fresh, server-filtered, paginated feed. */}
+          <KnockFeedProvider
+            key={`${category}-${unreadOnly}`}
+            feedId={session?.feedId}
+            defaultFeedOptions={{
+              page_size: 20,
+              status: unreadOnly ? "unread" : "all",
+              ...(category ? { trigger_data: { category } } : {}),
+            }}
+          >
+            <DList
+              category={category}
+              unreadOnly={unreadOnly}
+              onOpened={() => {
+                setOpen(false);
+                refreshBadge();
+              }}
+              onChanged={refreshBadge}
+            />
+          </KnockFeedProvider>
+        </div>
+      )}
+    </>
+  );
+}
+
+function DList({
+  category,
+  unreadOnly,
+  onOpened,
+  onChanged,
+}: {
+  category: string | null;
+  unreadOnly: boolean;
+  onOpened: () => void;
+  onChanged: () => void;
+}) {
+  const { feedClient, useFeedStore } = useKnockFeed();
+  const items = useFeedStore((s) => s.items);
+  const metadata = useFeedStore((s) => s.metadata);
+  const pageInfo = useFeedStore((s) => s.pageInfo);
+  const networkStatus = useFeedStore((s) => s.networkStatus);
+  const [fetched, setFetched] = useState(false);
+  const openItem = useOpenNotification(onOpened);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const sentinelRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    feedClient.fetch().then(() => setFetched(true));
+  }, [feedClient]);
+
+  // Infinite scroll: fetch the next page when the sentinel scrolls into view.
+  useEffect(() => {
+    const el = sentinelRef.current;
+    if (!el) return;
+    const io = new IntersectionObserver(
+      ([e]) => {
+        if (e.isIntersecting && pageInfo.after && networkStatus === "ready")
+          feedClient.fetchNextPage();
+      },
+      { root: scrollRef.current, rootMargin: "120px" }
+    );
+    io.observe(el);
+    return () => io.disconnect();
+  }, [feedClient, pageInfo.after, networkStatus, items.length]);
+
+  if (!fetched && items.length === 0) {
+    return (
+      <div className="space-y-3 p-4">
+        {[0, 1, 2, 3].map((i) => (
+          <div key={i} className="flex gap-3">
+            <div className="size-9 animate-pulse rounded-lg bg-muted" />
+            <div className="flex-1 space-y-2">
+              <div className="h-3 w-4/5 animate-pulse rounded bg-muted" />
+              <div className="h-2.5 w-1/3 animate-pulse rounded bg-muted" />
+            </div>
+          </div>
+        ))}
+      </div>
+    );
+  }
+
+  if (items.length === 0) {
+    const what = category ? CATEGORY_LABEL[category]?.toLowerCase() : null;
+    return (
+      <div className="flex flex-col items-center px-8 py-14 text-center">
+        <div className="mb-3 rounded-full bg-muted p-3">
+          <BellOff className="size-6 text-muted-foreground" />
+        </div>
+        <p className="font-medium">
+          {unreadOnly
+            ? "You're all caught up"
+            : what
+              ? `No ${what} Notifications`
+              : "No Notifications yet"}
+        </p>
+        <p className="mt-1 text-sm text-muted-foreground">
+          {unreadOnly
+            ? "Nothing unread here."
+            : "When something concerns you, such as a reply or a refund update, it'll show up here."}
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div ref={scrollRef} className="flex-1 overflow-y-auto">
+      <ul>
+        {items.map((item) => {
+          const d = dataOf(item) as Partial<NotificationData> & { category?: string };
+          const k = kindOf(d.kind);
+          return (
+            <li key={item.id} className="group relative border-b last:border-0">
+              <button
+                onClick={() => openItem(item)}
+                className={cn(
+                  "flex w-full gap-3 px-4 py-3 pr-10 text-left transition-colors hover:bg-muted/60",
+                  !item.read_at && "bg-primary/[0.04]"
+                )}
+              >
+                <span className={cn("flex size-9 shrink-0 items-center justify-center rounded-lg", k.tone)}>
+                  {k.icon}
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span
+                    className={cn(
+                      "block text-sm leading-snug",
+                      item.read_at ? "text-muted-foreground" : "text-foreground/80"
+                    )}
+                  >
+                    <Message text={d.message ?? ""} />
+                  </span>
+                  <span className="mt-1 block text-xs text-muted-foreground/80">
+                    {CATEGORY_LABEL[d.category ?? ""] ?? k.label} · {ago(item.inserted_at)}
+                  </span>
+                </span>
+              </button>
+              {!item.read_at && (
+                <button
+                  title="Mark as read"
+                  onClick={async () => {
+                    await feedClient.markAsRead(item);
+                    onChanged();
+                  }}
+                  className="absolute right-3 top-1/2 flex size-5 -translate-y-1/2 items-center justify-center rounded-full"
+                >
+                  <span className="size-2 rounded-full bg-primary group-hover:hidden" />
+                  <Check className="hidden size-3.5 text-muted-foreground group-hover:block" />
+                </button>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+      <div ref={sentinelRef} className="px-4 py-3 text-center text-xs text-muted-foreground">
+        {pageInfo.after
+          ? networkStatus === "fetchMore"
+            ? "Loading more…"
+            : " "
+          : `That's everything · ${metadata.total_count} Notification${metadata.total_count === 1 ? "" : "s"}`}
+      </div>
+    </div>
+  );
+}
+
 // ---------- floating switcher + prototype controls ----------
 
 export function PrototypeSwitcher() {
@@ -533,6 +837,9 @@ export function PrototypeSwitcher() {
         </button>
         <button name="intent" value="one" disabled={seed.state !== "idle"} className={btn}>
           +1 live
+        </button>
+        <button name="intent" value="hundred" disabled={seed.state !== "idle"} className={btn}>
+          +100
         </button>
       </seed.Form>
       <button onClick={() => feedClient.markAllAsArchived()} className={btn}>

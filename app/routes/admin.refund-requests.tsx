@@ -396,7 +396,7 @@ function DecisionButtons({ row }: { row: Row }) {
 
 function RefundRequestCard({ row }: { row: Row }) {
   return (
-    <Card>
+    <Card id={`refund-request-${row.id}`} className="scroll-mt-6" /* PROTOTYPE notification-feed anchor */>
       <CardContent className="space-y-4 p-5">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>

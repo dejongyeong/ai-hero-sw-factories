@@ -25,6 +25,7 @@ import {
   VariantABell,
   VariantBNavItem,
   VariantCBell,
+  VariantDBell,
 } from "~/components/prototype-notification-feed";
 
 interface CurrentUser {
@@ -151,6 +152,11 @@ export function Sidebar({
         {currentUser && variant === "A" && (
           <div className="ml-auto">
             <VariantABell />
+          </div>
+        )}
+        {currentUser && variant === "D" && (
+          <div className="ml-auto">
+            <VariantDBell />
           </div>
         )}
       </div>

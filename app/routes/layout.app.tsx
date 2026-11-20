@@ -4,7 +4,7 @@ import { Sidebar } from "~/components/sidebar";
 import { DevUI } from "~/components/dev-ui";
 import { Toaster } from "sonner";
 // PROTOTYPE — notification-feed
-import { knockSession } from "~/lib/prototype-feed.server";
+import { categoriesFor, knockSession } from "~/lib/prototype-feed.server";
 import {
   PrototypeFeedProvider,
   PrototypeSwitcher,
@@ -221,7 +221,10 @@ export async function loader({ request }: Route.LoaderArgs) {
     isTeamAdmin: currentUserId ? isTeamAdmin(currentUserId) : false,
     // PROTOTYPE — notification-feed
     knock: currentUser
-      ? await knockSession(currentUser.id, currentUser.name)
+      ? {
+          ...(await knockSession(currentUser.id, currentUser.name)),
+          categories: categoriesFor(currentUser.id),
+        }
       : null,
   };
 }

@@ -5,10 +5,13 @@
 // seeded names, courses and lessons so the Feed is judged at real density.
 import { Knock, signUserToken } from "@knocklabs/node";
 import { and, eq, ne } from "drizzle-orm";
+import { isNotNull, isNull } from "drizzle-orm";
 import { db } from "~/db";
 import {
+  comments,
   courses,
   lessons,
+  refundRequests,
   modules,
   teamMembers,
   TeamMemberRole,
@@ -58,8 +61,31 @@ export type NotificationKind =
   | "new-purchase"
   | "seat-claimed";
 
+// Feed filters. Real code would put each workflow in a Knock workflow category
+// and filter with `workflow_categories`; the prototype has one workflow, so it
+// filters on `trigger_data.category` instead (also server-side, also paginates).
+export type Category = "discussions" | "refunds" | "team" | "enrollments";
+const CATEGORY: Record<NotificationKind, Category> = {
+  "comment-reply": "discussions",
+  "new-question": "discussions",
+  "refund-raised": "refunds",
+  "refund-received": "refunds",
+  "refund-approved": "refunds",
+  "refund-declined": "refunds",
+  "refund-issued": "refunds",
+  "refund-failed": "refunds",
+  "new-purchase": "enrollments",
+  "seat-claimed": "team",
+};
+
+/** The filters worth showing: only categories this person can ever receive. */
+export function categoriesFor(userId: number): Category[] {
+  return [...new Set(catalogueFor(userId).map((n) => n.category))];
+}
+
 export type PrototypeNotification = {
   kind: NotificationKind;
+  category: Category;
   message: string; // markdown, what Knock's stock cell renders
   actor: string | null;
   course: string;
@@ -98,8 +124,26 @@ export function catalogueFor(userId: number): PrototypeNotification[] {
   const amount = formatPrice(course.price);
   const C = course.title;
   const out: PrototypeNotification[] = [];
-  const add = (n: Omit<PrototypeNotification, "course">) =>
-    out.push({ ...n, course: C });
+  const add = (n: Omit<PrototypeNotification, "course" | "category">) =>
+    out.push({ ...n, course: C, category: CATEGORY[n.kind] });
+  // Real records to deep-link to: the most specific place we can.
+  const question = db.select().from(comments).where(isNull(comments.parentId)).get();
+  const reply = db.select().from(comments).where(isNotNull(comments.parentId)).get();
+  const commentUrl = (c: typeof question) => {
+    if (!c) return lessonUrl;
+    const l = db
+      .select({ courseSlug: courses.slug })
+      .from(lessons)
+      .innerJoin(modules, eq(lessons.moduleId, modules.id))
+      .innerJoin(courses, eq(modules.courseId, courses.id))
+      .where(eq(lessons.id, c.lessonId))
+      .get();
+    return `/courses/${l?.courseSlug ?? course.slug}/lessons/${c.lessonId}#comment-${c.id}`;
+  };
+  const refundRequest = db.select().from(refundRequests).get();
+  const refundUrl = refundRequest
+    ? `/admin/refund-requests?status=${refundRequest.status}#refund-request-${refundRequest.id}`
+    : "/admin/refund-requests";
 
   if (me.role === UserRole.Student) {
     add({
@@ -138,19 +182,19 @@ export function catalogueFor(userId: number): PrototypeNotification[] {
       kind: "new-purchase",
       actor: other.name,
       message: `**${other.name}** bought **${C}**`,
-      url: `/instructor/${course.id}/students`,
+      url: `/instructor/${course.id}/students#student-${other.id}`,
     });
     add({
       kind: "new-purchase",
       actor: other.name,
       message: `**${other.name}** bought 10 seats on **${C}**`,
-      url: `/instructor/${course.id}/students`,
+      url: `/instructor/${course.id}/students#student-${other.id}`,
     });
     add({
       kind: "new-question",
       actor: other.name,
       message: `**${other.name}** asked a question on **${lessonTitle}**`,
-      url: lessonUrl,
+      url: commentUrl(question),
     });
   }
   if (me.role === UserRole.Admin) {
@@ -158,13 +202,13 @@ export function catalogueFor(userId: number): PrototypeNotification[] {
       kind: "refund-raised",
       actor: other.name,
       message: `**${other.name}** requested a refund for **${C}** (${amount})`,
-      url: "/admin/refund-requests",
+      url: refundUrl,
     });
     add({
       kind: "refund-failed",
       actor: other.name,
       message: `Refund for **${other.name}** on **${C}** failed`,
-      url: "/admin/refund-requests",
+      url: refundUrl,
     });
   }
   const isTeamAdmin = !!db
@@ -190,7 +234,7 @@ export function catalogueFor(userId: number): PrototypeNotification[] {
     kind: "comment-reply",
     actor: other.name,
     message: `**${other.name}** replied to your comment on **${lessonTitle}**`,
-    url: lessonUrl,
+    url: commentUrl(reply),
   });
   return out;
 }
