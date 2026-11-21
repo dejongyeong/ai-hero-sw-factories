@@ -773,7 +773,11 @@ export function VariantDBell() {
     <>
       <button
         ref={buttonRef}
-        onClick={() => setOpen(!open)}
+        onClick={() => {
+          // Unread-first: open on Unread whenever anything is unread.
+          if (!open) setUnreadOnly(count > 0);
+          setOpen(!open);
+        }}
         aria-label={`Notifications${count ? `, ${count} unread` : ""}`}
         className={cn(
           "relative rounded-md p-1.5 text-sidebar-foreground/70 transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
@@ -972,6 +976,23 @@ function DPageBody({
   const { feedClient, items, metadata, pageInfo, networkStatus } = useDStore();
   const fetched = useFetchedOnce();
   const openItem = useOpenNotification(refreshBadge);
+  const sentinelRef = useRef<HTMLDivElement>(null);
+  const more = !!pageInfo.after;
+
+  // Infinite scroll on the page; "Load more" stays as the fallback.
+  useEffect(() => {
+    const el = sentinelRef.current;
+    if (!el) return;
+    const io = new IntersectionObserver(
+      ([e]) => {
+        if (e.isIntersecting && more && networkStatus === "ready") feedClient.fetchNextPage();
+      },
+      { rootMargin: "200px" }
+    );
+    io.observe(el);
+    return () => io.disconnect();
+  }, [feedClient, more, networkStatus, items.length]);
+
   return (
     <>
       <div className="mb-6 flex items-end justify-between">
@@ -1011,7 +1032,7 @@ function DPageBody({
         )}
       </div>
       {items.length > 0 && (
-        <div className="mt-4 flex items-center justify-between text-sm text-muted-foreground">
+        <div ref={sentinelRef} className="mt-4 flex items-center justify-between text-sm text-muted-foreground">
           <span>
             Showing {items.length} of {metadata.total_count}
           </span>
