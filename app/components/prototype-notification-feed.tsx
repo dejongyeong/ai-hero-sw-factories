@@ -512,7 +512,10 @@ export function VariantCBell() {
   );
 }
 
-// ---------- Variant D: Cadence popover ----------
+// ---------- Variant D: Cadence popover (canonical) ----------
+// The popover is for triage: the latest POPOVER_CAP Notifications, loaded on
+// scroll, grouped by day, then a hand-off to the full page. The page is for
+// history: same filters, explicit "Load more", a visible count.
 
 const CATEGORY_LABEL: Record<string, string> = {
   discussions: "Discussions",
@@ -520,6 +523,223 @@ const CATEGORY_LABEL: Record<string, string> = {
   team: "Team",
   enrollments: "Enrollments",
 };
+const POPOVER_CAP = 50;
+
+function feedOptions(category: string | null, unreadOnly: boolean, pageSize: number) {
+  return {
+    page_size: pageSize,
+    status: unreadOnly ? ("unread" as const) : ("all" as const),
+    ...(category ? { trigger_data: { category } } : {}),
+  };
+}
+
+function notificationsHref(category: string | null, unreadOnly: boolean) {
+  const p = new URLSearchParams();
+  if (category) p.set("category", category);
+  if (unreadOnly) p.set("unread", "1");
+  const q = p.toString();
+  return `/notifications${q ? `?${q}` : ""}`;
+}
+
+/** A pressed-state toggle with a check mark, replacing the checkbox. */
+function UnreadToggle({ on, onChange }: { on: boolean; onChange: (v: boolean) => void }) {
+  return (
+    <button
+      type="button"
+      aria-pressed={on}
+      onClick={() => onChange(!on)}
+      className={cn(
+        "flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs font-medium transition-colors",
+        on
+          ? "border-primary/40 bg-primary/10 text-primary"
+          : "border-border text-muted-foreground hover:bg-muted hover:text-foreground"
+      )}
+    >
+      <Check className={cn("size-3.5 transition-all", on ? "opacity-100" : "-ml-1 w-0 opacity-0")} />
+      Unread
+    </button>
+  );
+}
+
+function FilterBar({
+  categories,
+  category,
+  onCategory,
+  unreadOnly,
+  onUnreadOnly,
+}: {
+  categories: string[];
+  category: string | null;
+  onCategory: (c: string | null) => void;
+  unreadOnly: boolean;
+  onUnreadOnly: (v: boolean) => void;
+}) {
+  return (
+    <div className="flex items-center gap-2">
+      <div className="flex min-w-0 flex-1 gap-1 overflow-x-auto">
+        {["all", ...categories].map((c) => {
+          const active = (category ?? "all") === c;
+          return (
+            <button
+              key={c}
+              onClick={() => onCategory(c === "all" ? null : c)}
+              className={cn(
+                "shrink-0 rounded-full border px-2.5 py-1 text-xs font-medium transition-colors",
+                active
+                  ? "border-primary bg-primary text-primary-foreground"
+                  : "border-border text-muted-foreground hover:bg-muted hover:text-foreground"
+              )}
+            >
+              {c === "all" ? "All" : CATEGORY_LABEL[c] ?? c}
+            </button>
+          );
+        })}
+      </div>
+      <span className="h-5 w-px shrink-0 bg-border" />
+      <UnreadToggle on={unreadOnly} onChange={onUnreadOnly} />
+    </div>
+  );
+}
+
+function useDStore() {
+  const { feedClient, useFeedStore } = useKnockFeed();
+  return {
+    feedClient,
+    items: useFeedStore((s) => s.items),
+    metadata: useFeedStore((s) => s.metadata),
+    pageInfo: useFeedStore((s) => s.pageInfo),
+    networkStatus: useFeedStore((s) => s.networkStatus),
+  };
+}
+
+function useFetchedOnce() {
+  const { feedClient } = useKnockFeed();
+  const [fetched, setFetched] = useState(false);
+  useEffect(() => {
+    feedClient.fetch().then(() => setFetched(true));
+  }, [feedClient]);
+  return fetched;
+}
+
+function DSkeleton() {
+  return (
+    <div className="space-y-3 p-4">
+      {[0, 1, 2, 3].map((i) => (
+        <div key={i} className="flex gap-3">
+          <div className="size-9 animate-pulse rounded-lg bg-muted" />
+          <div className="flex-1 space-y-2">
+            <div className="h-3 w-4/5 animate-pulse rounded bg-muted" />
+            <div className="h-2.5 w-1/3 animate-pulse rounded bg-muted" />
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function DEmpty({ category, unreadOnly }: { category: string | null; unreadOnly: boolean }) {
+  const what = category ? CATEGORY_LABEL[category]?.toLowerCase() : null;
+  return (
+    <div className="flex flex-col items-center px-8 py-14 text-center">
+      <div className="mb-3 rounded-full bg-muted p-3">
+        <BellOff className="size-6 text-muted-foreground" />
+      </div>
+      <p className="font-medium">
+        {unreadOnly ? "You're all caught up" : what ? `No ${what} Notifications` : "No Notifications yet"}
+      </p>
+      <p className="mt-1 text-sm text-muted-foreground">
+        {unreadOnly
+          ? "Nothing unread here."
+          : "When something concerns you, such as a reply or a refund update, it'll show up here."}
+      </p>
+    </div>
+  );
+}
+
+/** Rows grouped under Today / Yesterday / Earlier headers. */
+function DRows({
+  items,
+  onOpen,
+  onChanged,
+  stickyHeaders,
+}: {
+  items: FeedItem[];
+  onOpen: (item: FeedItem) => void;
+  onChanged: () => void;
+  stickyHeaders: boolean;
+}) {
+  const { feedClient } = useKnockFeed();
+  const groups: [string, FeedItem[]][] = [];
+  for (const item of items) {
+    const day = dayBucket(item.inserted_at);
+    const last = groups[groups.length - 1];
+    if (last && last[0] === day) last[1].push(item);
+    else groups.push([day, [item]]);
+  }
+  return (
+    <>
+      {groups.map(([day, list]) => (
+        <section key={day}>
+          <h3
+            className={cn(
+              "border-b bg-popover/95 px-4 py-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground backdrop-blur",
+              stickyHeaders && "sticky top-0 z-10"
+            )}
+          >
+            {day}
+          </h3>
+          <ul>
+            {list.map((item) => {
+              const d = dataOf(item) as Partial<NotificationData> & { category?: string };
+              const k = kindOf(d.kind);
+              return (
+                <li key={item.id} className="group relative border-b last:border-0">
+                  <button
+                    onClick={() => onOpen(item)}
+                    className={cn(
+                      "flex w-full gap-3 px-4 py-3 pr-10 text-left transition-colors hover:bg-muted/60",
+                      !item.read_at && "bg-primary/[0.04]"
+                    )}
+                  >
+                    <span className={cn("flex size-9 shrink-0 items-center justify-center rounded-lg", k.tone)}>
+                      {k.icon}
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span
+                        className={cn(
+                          "block text-sm leading-snug",
+                          item.read_at ? "text-muted-foreground" : "text-foreground/80"
+                        )}
+                      >
+                        <Message text={d.message ?? ""} />
+                      </span>
+                      <span className="mt-1 block text-xs text-muted-foreground/80">
+                        {CATEGORY_LABEL[d.category ?? ""] ?? k.label} · {ago(item.inserted_at)}
+                      </span>
+                    </span>
+                  </button>
+                  {!item.read_at && (
+                    <button
+                      title="Mark as read"
+                      onClick={async () => {
+                        await feedClient.markAsRead(item);
+                        onChanged();
+                      }}
+                      className="absolute right-3 top-1/2 flex size-5 -translate-y-1/2 items-center justify-center rounded-full"
+                    >
+                      <span className="size-2 rounded-full bg-primary group-hover:hidden" />
+                      <Check className="hidden size-3.5 text-muted-foreground group-hover:block" />
+                    </button>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        </section>
+      ))}
+    </>
+  );
+}
 
 export function VariantDBell() {
   const session = useContext(SessionContext);
@@ -547,8 +767,7 @@ export function VariantDBell() {
 
   // The filtered list is its own feed client; refresh the badge's feed after changes.
   const refreshBadge = () => setTimeout(() => outer.fetch(), 300);
-  const count = metadata.unread_count;
-  const chips = ["all", ...(session?.categories ?? [])];
+  const count = metadata.unread_count; // unread, not unseen: stays until acted on
 
   return (
     <>
@@ -574,71 +793,20 @@ export function VariantDBell() {
           ref={panelRef}
           className="fixed left-[calc(14rem+8px)] top-2 z-40 flex max-h-[min(640px,calc(100vh-1rem))] w-[420px] flex-col overflow-hidden rounded-xl border bg-popover text-popover-foreground shadow-2xl"
         >
-          <header className="border-b px-4 pb-2 pt-3">
-            <div className="flex items-center justify-between">
-              <h2 className="text-base font-semibold">Notifications</h2>
-              <div className="flex items-center gap-3">
-                <label className="flex cursor-pointer items-center gap-1.5 text-xs text-muted-foreground">
-                  <input
-                    type="checkbox"
-                    checked={unreadOnly}
-                    onChange={(e) => setUnreadOnly(e.target.checked)}
-                    className="accent-[var(--primary)]"
-                  />
-                  Unread only
-                </label>
-                <button
-                  title="Mark all as read"
-                  disabled={count === 0}
-                  onClick={async () => {
-                    await outer.markAllAsRead();
-                    refreshBadge();
-                  }}
-                  className="rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-30"
-                >
-                  <CheckCheck className="size-4" />
-                </button>
-              </div>
-            </div>
-            <div className="mt-2 flex gap-1 overflow-x-auto">
-              {chips.map((c) => {
-                const active = (category ?? "all") === c;
-                return (
-                  <button
-                    key={c}
-                    onClick={() => setCategory(c === "all" ? null : c)}
-                    className={cn(
-                      "rounded-full border px-2.5 py-1 text-xs font-medium transition-colors",
-                      active
-                        ? "border-primary bg-primary text-primary-foreground"
-                        : "border-border text-muted-foreground hover:bg-muted hover:text-foreground"
-                    )}
-                  >
-                    {c === "all" ? "All" : CATEGORY_LABEL[c] ?? c}
-                  </button>
-                );
-              })}
-            </div>
-          </header>
-
           {/* Keyed so each filter gets a fresh, server-filtered, paginated feed. */}
           <KnockFeedProvider
             key={`${category}-${unreadOnly}`}
             feedId={session?.feedId}
-            defaultFeedOptions={{
-              page_size: 20,
-              status: unreadOnly ? "unread" : "all",
-              ...(category ? { trigger_data: { category } } : {}),
-            }}
+            defaultFeedOptions={feedOptions(category, unreadOnly, 20)}
           >
-            <DList
+            <DPopoverPanel
+              categories={session?.categories ?? []}
               category={category}
+              onCategory={setCategory}
               unreadOnly={unreadOnly}
-              onOpened={() => {
-                setOpen(false);
-                refreshBadge();
-              }}
-              onChanged={refreshBadge}
+              onUnreadOnly={setUnreadOnly}
+              onClose={() => setOpen(false)}
+              refreshBadge={refreshBadge}
             />
           </KnockFeedProvider>
         </div>
@@ -647,142 +815,220 @@ export function VariantDBell() {
   );
 }
 
-function DList({
+function DPopoverPanel({
+  categories,
   category,
+  onCategory,
   unreadOnly,
-  onOpened,
-  onChanged,
+  onUnreadOnly,
+  onClose,
+  refreshBadge,
 }: {
+  categories: string[];
   category: string | null;
+  onCategory: (c: string | null) => void;
   unreadOnly: boolean;
-  onOpened: () => void;
-  onChanged: () => void;
+  onUnreadOnly: (v: boolean) => void;
+  onClose: () => void;
+  refreshBadge: () => void;
 }) {
-  const { feedClient, useFeedStore } = useKnockFeed();
-  const items = useFeedStore((s) => s.items);
-  const metadata = useFeedStore((s) => s.metadata);
-  const pageInfo = useFeedStore((s) => s.pageInfo);
-  const networkStatus = useFeedStore((s) => s.networkStatus);
-  const [fetched, setFetched] = useState(false);
-  const openItem = useOpenNotification(onOpened);
+  const { feedClient, items, metadata, pageInfo, networkStatus } = useDStore();
+  const fetched = useFetchedOnce();
+  const openItem = useOpenNotification(() => {
+    onClose();
+    refreshBadge();
+  });
   const scrollRef = useRef<HTMLDivElement>(null);
   const sentinelRef = useRef<HTMLDivElement>(null);
+  const capped = items.length >= POPOVER_CAP;
+  const more = !!pageInfo.after;
 
-  useEffect(() => {
-    feedClient.fetch().then(() => setFetched(true));
-  }, [feedClient]);
-
-  // Infinite scroll: fetch the next page when the sentinel scrolls into view.
+  // Load on scroll, but only up to the cap: past that, the page takes over.
   useEffect(() => {
     const el = sentinelRef.current;
-    if (!el) return;
+    if (!el || capped) return;
     const io = new IntersectionObserver(
       ([e]) => {
-        if (e.isIntersecting && pageInfo.after && networkStatus === "ready")
-          feedClient.fetchNextPage();
+        if (e.isIntersecting && more && networkStatus === "ready") feedClient.fetchNextPage();
       },
       { root: scrollRef.current, rootMargin: "120px" }
     );
     io.observe(el);
     return () => io.disconnect();
-  }, [feedClient, pageInfo.after, networkStatus, items.length]);
-
-  if (!fetched && items.length === 0) {
-    return (
-      <div className="space-y-3 p-4">
-        {[0, 1, 2, 3].map((i) => (
-          <div key={i} className="flex gap-3">
-            <div className="size-9 animate-pulse rounded-lg bg-muted" />
-            <div className="flex-1 space-y-2">
-              <div className="h-3 w-4/5 animate-pulse rounded bg-muted" />
-              <div className="h-2.5 w-1/3 animate-pulse rounded bg-muted" />
-            </div>
-          </div>
-        ))}
-      </div>
-    );
-  }
-
-  if (items.length === 0) {
-    const what = category ? CATEGORY_LABEL[category]?.toLowerCase() : null;
-    return (
-      <div className="flex flex-col items-center px-8 py-14 text-center">
-        <div className="mb-3 rounded-full bg-muted p-3">
-          <BellOff className="size-6 text-muted-foreground" />
-        </div>
-        <p className="font-medium">
-          {unreadOnly
-            ? "You're all caught up"
-            : what
-              ? `No ${what} Notifications`
-              : "No Notifications yet"}
-        </p>
-        <p className="mt-1 text-sm text-muted-foreground">
-          {unreadOnly
-            ? "Nothing unread here."
-            : "When something concerns you, such as a reply or a refund update, it'll show up here."}
-        </p>
-      </div>
-    );
-  }
+  }, [feedClient, more, networkStatus, capped, items.length]);
 
   return (
-    <div ref={scrollRef} className="flex-1 overflow-y-auto">
-      <ul>
-        {items.map((item) => {
-          const d = dataOf(item) as Partial<NotificationData> & { category?: string };
-          const k = kindOf(d.kind);
-          return (
-            <li key={item.id} className="group relative border-b last:border-0">
-              <button
-                onClick={() => openItem(item)}
-                className={cn(
-                  "flex w-full gap-3 px-4 py-3 pr-10 text-left transition-colors hover:bg-muted/60",
-                  !item.read_at && "bg-primary/[0.04]"
-                )}
-              >
-                <span className={cn("flex size-9 shrink-0 items-center justify-center rounded-lg", k.tone)}>
-                  {k.icon}
-                </span>
-                <span className="min-w-0 flex-1">
-                  <span
-                    className={cn(
-                      "block text-sm leading-snug",
-                      item.read_at ? "text-muted-foreground" : "text-foreground/80"
-                    )}
-                  >
-                    <Message text={d.message ?? ""} />
-                  </span>
-                  <span className="mt-1 block text-xs text-muted-foreground/80">
-                    {CATEGORY_LABEL[d.category ?? ""] ?? k.label} · {ago(item.inserted_at)}
-                  </span>
-                </span>
-              </button>
-              {!item.read_at && (
-                <button
-                  title="Mark as read"
-                  onClick={async () => {
-                    await feedClient.markAsRead(item);
-                    onChanged();
-                  }}
-                  className="absolute right-3 top-1/2 flex size-5 -translate-y-1/2 items-center justify-center rounded-full"
-                >
-                  <span className="size-2 rounded-full bg-primary group-hover:hidden" />
-                  <Check className="hidden size-3.5 text-muted-foreground group-hover:block" />
-                </button>
-              )}
-            </li>
-          );
-        })}
-      </ul>
-      <div ref={sentinelRef} className="px-4 py-3 text-center text-xs text-muted-foreground">
-        {pageInfo.after
-          ? networkStatus === "fetchMore"
-            ? "Loading more…"
-            : " "
-          : `That's everything · ${metadata.total_count} Notification${metadata.total_count === 1 ? "" : "s"}`}
-      </div>
+    <>
+      <header className="space-y-2 border-b px-4 pb-2.5 pt-3">
+        <div className="flex items-center justify-between">
+          <h2 className="text-base font-semibold">Notifications</h2>
+          <button
+            title="Mark all as read"
+            disabled={metadata.unread_count === 0}
+            onClick={async () => {
+              await feedClient.markAllAsRead();
+              refreshBadge();
+            }}
+            className="flex items-center gap-1 rounded-md px-1.5 py-1 text-xs font-medium text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-30"
+          >
+            <CheckCheck className="size-4" /> Mark all read
+          </button>
+        </div>
+        <FilterBar
+          categories={categories}
+          category={category}
+          onCategory={onCategory}
+          unreadOnly={unreadOnly}
+          onUnreadOnly={onUnreadOnly}
+        />
+      </header>
+
+      {!fetched && items.length === 0 ? (
+        <DSkeleton />
+      ) : items.length === 0 ? (
+        <DEmpty category={category} unreadOnly={unreadOnly} />
+      ) : (
+        <div ref={scrollRef} className="flex-1 overflow-y-auto">
+          <DRows items={items} onOpen={openItem} onChanged={refreshBadge} stickyHeaders />
+          <div ref={sentinelRef} className="px-4 py-3 text-center text-xs text-muted-foreground">
+            {capped && more
+              ? `Showing the latest ${items.length} of ${metadata.total_count}`
+              : more
+                ? networkStatus === "fetchMore"
+                  ? "Loading more…"
+                  : " "
+                : `That's everything · ${metadata.total_count} Notification${metadata.total_count === 1 ? "" : "s"}`}
+          </div>
+        </div>
+      )}
+
+      {/* Always reachable, whatever the scroll position. */}
+      <footer className="border-t">
+        <Link
+          to={notificationsHref(category, unreadOnly)}
+          onClick={onClose}
+          className="flex items-center justify-center gap-1 px-4 py-2.5 text-sm font-medium text-primary hover:bg-muted/60"
+        >
+          View all notifications
+          <ChevronRight className="size-4" />
+        </Link>
+      </footer>
+    </>
+  );
+}
+
+/** The /notifications page for Variant D: history, with explicit paging. */
+export function VariantDPage() {
+  const session = useContext(SessionContext);
+  const { feedClient: outer } = useFeed();
+  const [params, setParams] = useSearchParams();
+  const category = params.get("category");
+  const unreadOnly = params.get("unread") === "1";
+  const set = (k: string, v: string | null) =>
+    setParams(
+      (p) => {
+        if (v) p.set(k, v);
+        else p.delete(k);
+        return p;
+      },
+      { replace: true }
+    );
+  if (!session) return null;
+  return (
+    <div className="mx-auto max-w-3xl p-6 lg:p-8">
+      <KnockFeedProvider
+        key={`${category}-${unreadOnly}`}
+        feedId={session.feedId}
+        defaultFeedOptions={feedOptions(category, unreadOnly, 25)}
+      >
+        <DPageBody
+          categories={session.categories}
+          category={category}
+          unreadOnly={unreadOnly}
+          onCategory={(c) => set("category", c)}
+          onUnreadOnly={(v) => set("unread", v ? "1" : null)}
+          refreshBadge={() => setTimeout(() => outer.fetch(), 300)}
+        />
+      </KnockFeedProvider>
     </div>
+  );
+}
+
+function DPageBody({
+  categories,
+  category,
+  unreadOnly,
+  onCategory,
+  onUnreadOnly,
+  refreshBadge,
+}: {
+  categories: string[];
+  category: string | null;
+  unreadOnly: boolean;
+  onCategory: (c: string | null) => void;
+  onUnreadOnly: (v: boolean) => void;
+  refreshBadge: () => void;
+}) {
+  const { feedClient, items, metadata, pageInfo, networkStatus } = useDStore();
+  const fetched = useFetchedOnce();
+  const openItem = useOpenNotification(refreshBadge);
+  return (
+    <>
+      <div className="mb-6 flex items-end justify-between">
+        <div>
+          <h1 className="text-3xl font-bold tracking-tight">Notifications</h1>
+          <p className="mt-1 text-muted-foreground">
+            {fetched ? `${metadata.unread_count} unread · ${metadata.total_count} in all` : " "}
+          </p>
+        </div>
+        <button
+          disabled={metadata.unread_count === 0}
+          onClick={async () => {
+            await feedClient.markAllAsRead();
+            refreshBadge();
+          }}
+          className="flex items-center gap-2 rounded-md border px-3 py-1.5 text-sm font-medium hover:bg-muted disabled:opacity-40"
+        >
+          <CheckCheck className="size-4" /> Mark all as read
+        </button>
+      </div>
+      <div className="mb-4">
+        <FilterBar
+          categories={categories}
+          category={category}
+          onCategory={onCategory}
+          unreadOnly={unreadOnly}
+          onUnreadOnly={onUnreadOnly}
+        />
+      </div>
+      <div className="overflow-hidden rounded-xl border bg-popover">
+        {!fetched && items.length === 0 ? (
+          <DSkeleton />
+        ) : items.length === 0 ? (
+          <DEmpty category={category} unreadOnly={unreadOnly} />
+        ) : (
+          <DRows items={items} onOpen={openItem} onChanged={refreshBadge} stickyHeaders={false} />
+        )}
+      </div>
+      {items.length > 0 && (
+        <div className="mt-4 flex items-center justify-between text-sm text-muted-foreground">
+          <span>
+            Showing {items.length} of {metadata.total_count}
+          </span>
+          {pageInfo.after ? (
+            <button
+              disabled={networkStatus !== "ready"}
+              onClick={() => feedClient.fetchNextPage()}
+              className="rounded-md border px-3 py-1.5 font-medium text-foreground hover:bg-muted disabled:opacity-50"
+            >
+              {networkStatus === "fetchMore" ? "Loading…" : "Load more"}
+            </button>
+          ) : (
+            <span>That's everything</span>
+          )}
+        </div>
+      )}
+    </>
   );
 }
 

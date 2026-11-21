@@ -4,7 +4,11 @@
 import { data } from "react-router";
 import type { Route } from "./+types/prototype.notifications-page";
 import { getCurrentUserId } from "~/lib/session";
-import { VariantBPage } from "~/components/prototype-notification-feed";
+import {
+  useVariant,
+  VariantBPage,
+  VariantDPage,
+} from "~/components/prototype-notification-feed";
 
 export async function loader({ request }: Route.LoaderArgs) {
   // No user → no Knock session in the layout → no Feed to read.
@@ -14,5 +18,5 @@ export async function loader({ request }: Route.LoaderArgs) {
 }
 
 export default function NotificationsPage() {
-  return <VariantBPage />;
+  return useVariant() === "D" ? <VariantDPage /> : <VariantBPage />;
 }
