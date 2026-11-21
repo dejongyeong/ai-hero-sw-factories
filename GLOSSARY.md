@@ -56,6 +56,10 @@ A Seat that no one has Claimed yet. Once its Team Licence is refunded, it can ne
 
 ### Learning
 
+**Published**:
+A course Students can find in the catalogue and buy. A course starts as a Draft and can later be Archived. Lessons have no state of their own: a lesson added to a Published course is visible to its enrolled Students straight away.
+_Avoid_: Live, Released
+
 **Enrollment**:
 A Student's access to a course's content. It ends when a Refund Request on their Purchase is approved, and a new Purchase starts a new one.
 _Avoid_: Access (on its own), Subscription, Seat
