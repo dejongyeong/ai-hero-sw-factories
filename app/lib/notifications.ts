@@ -54,7 +54,7 @@ export function describeNotification(
     return {
       sentence: [
         { text: parsed.data.actor_name, bold: true },
-        { text: " replied to your comment on ", bold: false },
+        { text: " replied to your Comment on ", bold: false },
         { text: parsed.data.lesson_title, bold: true },
       ],
       href: parsed.data.url,

@@ -253,7 +253,7 @@ function EmptyFeed() {
       </div>
       <p className="font-medium">No Notifications yet</p>
       <p className="mt-1 text-sm text-muted-foreground">
-        When something concerns you, such as a reply to your comment, it'll show
+        When something concerns you, such as a Reply to your Comment, it'll show
         up here.
       </p>
     </div>
