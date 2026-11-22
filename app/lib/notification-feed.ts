@@ -77,23 +77,35 @@ export function popoverPage<T>(
 export type FeedBody =
   | { kind: "loading" }
   | { kind: "rows" }
-  | { kind: "empty"; title: string; detail: string };
+  | { kind: "empty"; title: string; detail: string }
+  | { kind: "error"; title: string; detail: string };
+
+/** How the Feed's first fetch went: still waiting, back, or failed. */
+export type FeedLoad = "pending" | "loaded" | "failed";
 
 /**
  * Picks what the Feed's body shows. Skeleton rows until the first fetch has
- * come back, so the empty state never flashes up before the Notifications.
+ * come back, so the empty state never flashes up before the Notifications,
+ * and an error rather than the empty state when the fetch failed.
  */
 export function feedBody({
-  fetched,
+  load,
   count,
   unreadOnly,
 }: {
-  fetched: boolean;
+  load: FeedLoad;
   count: number;
   unreadOnly: boolean;
 }): FeedBody {
   if (count > 0) return { kind: "rows" };
-  if (!fetched) return { kind: "loading" };
+  if (load === "pending") return { kind: "loading" };
+  if (load === "failed") {
+    return {
+      kind: "error",
+      title: "Couldn't load Notifications.",
+      detail: "Try again in a moment.",
+    };
+  }
   return unreadOnly
     ? {
         kind: "empty",
