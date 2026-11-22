@@ -1,7 +1,7 @@
 import { Knock } from "@knocklabs/node";
 import { eq } from "drizzle-orm";
 import type { Db } from "~/db";
-import { courses, lessons, modules, users } from "~/db/schema";
+import { UserRole, courses, lessons, modules, users } from "~/db/schema";
 import { knockConfig, knockUserId } from "~/lib/knock.server";
 import { getCommentById } from "~/lib/comments.server";
 import { writeToOutbox } from "~/lib/outbox.server";
@@ -16,8 +16,8 @@ import {
 // the change is written. Each works out its recipients and trigger data from
 // the database and hands them to a Notification transport. Knock delivers
 // when KNOCK_SECRET_API_KEY is set (ADR 0013). Without it (local dev, tests)
-// each trigger is written to .outbox/ as a JSON file instead, as the mailer
-// does.
+// each trigger, and each archive request, is written to .outbox/ as a JSON
+// file instead, as the mailer does.
 //
 // A Notification never fails the action that caused it: every function here
 // catches and logs instead of throwing.
@@ -40,12 +40,20 @@ export type NotificationTrigger<
   data: NotificationData<W>;
 };
 
+/** Picks out Knock messages by their trigger data. */
+export type MessageFilter = { comment_id: number };
+
 export interface NotificationTransport {
   trigger<W extends NotificationWorkflow>(
     workflow: W,
     trigger: NotificationTrigger<W>
   ): Promise<void>;
+  /** Archives every message, for every recipient, matching `filter`. */
+  archiveMessages(filter: MessageFilter): Promise<void>;
 }
+
+/** Knock archives at most this many messages per batch request. */
+const ARCHIVE_BATCH_SIZE = 50;
 
 export function knockTransport(secretKey: string): NotificationTransport {
   const knock = new Knock({ apiKey: secretKey });
@@ -57,6 +65,19 @@ export function knockTransport(secretKey: string): NotificationTransport {
         data: trigger.data,
       });
     },
+    async archiveMessages(filter) {
+      const messageIds: string[] = [];
+      for await (const message of knock.messages.list({
+        trigger_data: JSON.stringify(filter),
+      })) {
+        messageIds.push(message.id);
+      }
+      for (let i = 0; i < messageIds.length; i += ARCHIVE_BATCH_SIZE) {
+        await knock.messages.batch.archive({
+          message_ids: messageIds.slice(i, i + ARCHIVE_BATCH_SIZE),
+        });
+      }
+    },
   };
 }
 
@@ -67,6 +88,9 @@ export function outboxTransport(directory: string): NotificationTransport {
         workflowKey: workflow,
         ...trigger,
       });
+    },
+    async archiveMessages(filter) {
+      writeToOutbox(directory, "notification-archive", { archive: filter });
     },
   };
 }
@@ -90,6 +114,7 @@ function getLessonWithCourse(db: Db, lessonId: number) {
       lessonId: lessons.id,
       lessonTitle: lessons.title,
       courseSlug: courses.slug,
+      instructorId: courses.instructorId,
     })
     .from(lessons)
     .innerJoin(modules, eq(lessons.moduleId, modules.id))
@@ -100,7 +125,7 @@ function getLessonWithCourse(db: Db, lessonId: number) {
 
 /** Runs one Notification, logging rather than throwing if anything fails. */
 async function deliver(
-  notification: NotificationWorkflow,
+  notification: string,
   build: () => Promise<void>
 ): Promise<void> {
   try {
@@ -145,5 +170,65 @@ export async function notifyCommentReply(
         },
       }
     );
+  });
+}
+
+/**
+ * New question: tells the course's owning Instructor that the Question
+ * `commentId` was asked on one of their lessons. Knock batches these per
+ * lesson over 10 minutes, keyed on `lesson_id`.
+ */
+export async function notifyNewQuestion(
+  db: Db,
+  commentId: number,
+  transport?: NotificationTransport
+): Promise<void> {
+  await deliver(NotificationWorkflow.NewQuestion, async () => {
+    const question = getCommentById(db, commentId);
+    if (!question || question.parentId !== null) return;
+
+    const lesson = getLessonWithCourse(db, question.lessonId);
+    if (!lesson) return;
+
+    // Only a Question notifies: a top-level post by staff (the course's
+    // Instructor or a Platform Admin) notifies no one.
+    const asker = getUser(db, question.userId);
+    if (!asker || asker.id === lesson.instructorId) return;
+    if (asker.role === UserRole.Admin) return;
+
+    // The owning Instructor only; a Platform Admin never receives it.
+    const instructor = getUser(db, lesson.instructorId);
+    if (!instructor || instructor.role === UserRole.Admin) return;
+
+    await (transport ?? defaultTransport()).trigger(
+      NotificationWorkflow.NewQuestion,
+      {
+        recipients: [personFor(instructor)],
+        actor: personFor(asker),
+        data: {
+          comment_id: question.id,
+          lesson_id: lesson.lessonId,
+          actor_name: asker.name,
+          lesson_title: lesson.lessonTitle,
+          url: commentHref(lesson.courseSlug, lesson.lessonId, question.id),
+        },
+      }
+    );
+  });
+}
+
+/**
+ * Called when a Comment is deleted: archives every Notification whose trigger
+ * data carries its `comment_id`, across all recipients, so it drops out of
+ * every Feed. Covers Comment reply and New question, batched or not.
+ */
+export async function archiveCommentNotifications(
+  commentId: number,
+  transport?: NotificationTransport
+): Promise<void> {
+  await deliver(`archive comment ${commentId}`, async () => {
+    await (transport ?? defaultTransport()).archiveMessages({
+      comment_id: commentId,
+    });
   });
 }

@@ -14,6 +14,7 @@ import {
   Check,
   CheckCheck,
   ChevronRight,
+  MessageCircleQuestion,
   MessageSquareReply,
 } from "lucide-react";
 import { cn, formatRelativeTime } from "~/lib/utils";
@@ -461,6 +462,10 @@ const ROW_ICONS = {
     icon: <MessageSquareReply className="size-4" />,
     tone: "bg-sky-100 text-sky-600 dark:bg-sky-950",
   },
+  [NotificationWorkflow.NewQuestion]: {
+    icon: <MessageCircleQuestion className="size-4" />,
+    tone: "bg-violet-100 text-violet-600 dark:bg-violet-950",
+  },
 } satisfies Record<NotificationWorkflow, RowIcon>;
 
 const FALLBACK_ICON: RowIcon = {
@@ -477,7 +482,11 @@ function FeedRow({
   onOpen: (item: FeedItem, href: string | null) => void;
   onMarkRead: (item: FeedItem) => void;
 }) {
-  const described = describeNotification(item.source.key, item.data);
+  const described = describeNotification(
+    item.source.key,
+    item.data,
+    item.total_activities
+  );
   const { icon, tone } = isNotificationWorkflow(item.source.key)
     ? ROW_ICONS[item.source.key]
     : FALLBACK_ICON;

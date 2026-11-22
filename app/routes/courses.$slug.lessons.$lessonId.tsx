@@ -16,7 +16,11 @@ import {
   editComment,
   postComment,
 } from "~/lib/comments.server";
-import { notifyCommentReply } from "~/lib/notify.server";
+import {
+  archiveCommentNotifications,
+  notifyCommentReply,
+  notifyNewQuestion,
+} from "~/lib/notify.server";
 import { db } from "~/db";
 import {
   categories,
@@ -825,6 +829,8 @@ export async function action({ params, request }: Route.ActionArgs) {
         );
         if (comment.parentId !== null) {
           await notifyCommentReply(db, comment.id);
+        } else {
+          await notifyNewQuestion(db, comment.id);
         }
         return { ok: true };
       }
@@ -849,6 +855,7 @@ export async function action({ params, request }: Route.ActionArgs) {
         return { ok: false, error: "Could not delete that comment." };
       }
       deleteComment(db, lessonId, parsed.data.commentId, actor);
+      await archiveCommentNotifications(parsed.data.commentId);
       return { ok: true };
     } catch (error) {
       // A Comment that isn't on this lesson is a 404, not a correctable error.

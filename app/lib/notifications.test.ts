@@ -41,4 +41,34 @@ describe("describeNotification", () => {
   it("returns null for an unknown workflow", () => {
     expect(describeNotification("refund-decided", {})).toBeNull();
   });
+
+  const newQuestion = {
+    comment_id: 9,
+    lesson_id: 3,
+    actor_name: "Liam",
+    lesson_title: "Generics",
+    url: "/courses/intro-ts/lessons/3#comment-9",
+  };
+
+  it("describes one New question with its asker, under Discussions", () => {
+    expect(describeNotification("new-question", newQuestion, 1)).toEqual({
+      sentence: [
+        { text: "Liam", bold: true },
+        { text: " asked a question on ", bold: false },
+        { text: "Generics", bold: true },
+      ],
+      href: "/courses/intro-ts/lessons/3#comment-9",
+      category: "Discussions",
+    });
+  });
+
+  it("describes a batch of New questions by their count", () => {
+    expect(
+      describeNotification("new-question", newQuestion, 3)?.sentence
+    ).toEqual([
+      { text: "3 new questions", bold: true },
+      { text: " on ", bold: false },
+      { text: "Generics", bold: true },
+    ]);
+  });
 });
