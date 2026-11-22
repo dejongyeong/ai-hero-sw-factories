@@ -126,7 +126,7 @@ A top-level Comment on a lesson by anyone other than the course's Instructor or 
 _Avoid_: Comment (on its own), Thread, Post, Top-level comment
 
 **Reply**:
-A Comment posted directly under a top-level Comment. A Reply cannot itself be replied to. Whoever asked a Question gets a Notification for every Reply to it, whoever wrote the Reply.
+A Comment posted directly under a top-level Comment. A Reply cannot itself be replied to. The author of the parent Comment gets a Notification for every Reply to it, whoever wrote the Reply, unless they wrote the Reply themselves.
 _Avoid_: Answer, Response, Child comment
 
 **Answered Question**:
