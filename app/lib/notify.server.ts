@@ -1,11 +1,10 @@
-import { mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
 import { Knock } from "@knocklabs/node";
 import { eq } from "drizzle-orm";
 import type { Db } from "~/db";
 import { courses, lessons, modules, users } from "~/db/schema";
 import { knockConfig, knockUserId } from "~/lib/knock.server";
 import { getCommentById } from "~/lib/comments.server";
+import { writeToOutbox } from "~/lib/outbox.server";
 import { commentHref } from "~/lib/comment-links";
 import {
   NotificationWorkflow,
@@ -63,13 +62,11 @@ export function knockTransport(secretKey: string): NotificationTransport {
 
 export function outboxTransport(directory: string): NotificationTransport {
   return {
-    async trigger(workflowKey, trigger) {
-      mkdirSync(directory, { recursive: true });
-      const file = join(
-        directory,
-        `${Date.now()}-notification-${workflowKey}.json`
-      );
-      writeFileSync(file, JSON.stringify({ workflowKey, ...trigger }, null, 2));
+    async trigger(workflow, trigger) {
+      writeToOutbox(directory, `notification-${workflow}`, {
+        workflowKey: workflow,
+        ...trigger,
+      });
     },
   };
 }
