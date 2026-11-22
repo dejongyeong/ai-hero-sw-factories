@@ -1,6 +1,5 @@
 import { eq } from "drizzle-orm";
-import type { BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
-import * as schema from "~/db/schema";
+import type { Db } from "~/db";
 import { comments, courses, lessons, modules } from "~/db/schema";
 import { MAX_COMMENT_LENGTH, MIN_COMMENT_LENGTH } from "~/lib/comments";
 
@@ -14,13 +13,41 @@ import { MAX_COMMENT_LENGTH, MIN_COMMENT_LENGTH } from "~/lib/comments";
 // one. Uses positional parameters (project convention). Failures the user can
 // correct are thrown as Errors whose message is safe to show.
 
-export type Db = BetterSQLite3Database<typeof schema>;
+/** Who is editing or deleting a Comment. */
+export type CommentActor = {
+  userId: number;
+  /** The course's Instructor or a Platform Admin. */
+  isStaff: boolean;
+};
+
+/**
+ * Thrown when a Comment does not exist on the lesson it was asked for. Not a
+ * user-correctable failure: routes turn it into a 404.
+ */
+export class CommentNotFoundError extends Error {
+  constructor() {
+    super("Comment not found");
+    this.name = "CommentNotFoundError";
+  }
+}
 
 export function getCommentById(db: Db, commentId: number) {
   return db.select().from(comments).where(eq(comments.id, commentId)).get();
 }
 
-function lessonExists(db: Db, lessonId: number) {
+/**
+ * Looks a Comment up scoped to a lesson, so a Comment elsewhere can't be
+ * reached by posting its id against this lesson.
+ */
+function getCommentOnLesson(db: Db, lessonId: number, commentId: number) {
+  const comment = getCommentById(db, commentId);
+  if (!comment || comment.lessonId !== lessonId) {
+    throw new CommentNotFoundError();
+  }
+  return comment;
+}
+
+function lessonBelongsToCourse(db: Db, lessonId: number) {
   return (
     db
       .select({ id: courses.id })
@@ -58,7 +85,7 @@ export function postComment(
 ) {
   const trimmed = assertValidBody(body);
 
-  if (!lessonExists(db, lessonId)) {
+  if (!lessonBelongsToCourse(db, lessonId)) {
     throw new Error("Lesson not found");
   }
 
@@ -82,23 +109,24 @@ export function postComment(
     .get();
 }
 
-/** Edits a Comment's body. Only its author may, and not once it is deleted. */
+/**
+ * Edits a Comment's body. Only its author may, and not once it is deleted.
+ * Throws CommentNotFoundError if the Comment is not on `lessonId`.
+ */
 export function editComment(
   db: Db,
+  lessonId: number,
   commentId: number,
-  userId: number,
+  actor: CommentActor,
   body: string
 ) {
+  const existing = getCommentOnLesson(db, lessonId, commentId);
   const trimmed = assertValidBody(body);
 
-  const existing = getCommentById(db, commentId);
-  if (!existing) {
-    throw new Error("Comment not found");
-  }
   if (existing.deletedAt !== null) {
     throw new Error("Comment has been deleted");
   }
-  if (existing.userId !== userId) {
+  if (existing.userId !== actor.userId) {
     throw new Error("You can only edit your own comments");
   }
 
@@ -113,18 +141,16 @@ export function editComment(
 /**
  * Soft-deletes a Comment. Its author may, and so may staff (the course's
  * Instructor or a Platform Admin). Deleting it again is a no-op.
+ * Throws CommentNotFoundError if the Comment is not on `lessonId`.
  */
 export function deleteComment(
   db: Db,
+  lessonId: number,
   commentId: number,
-  userId: number,
-  isStaff: boolean
+  actor: CommentActor
 ) {
-  const existing = getCommentById(db, commentId);
-  if (!existing) {
-    throw new Error("Comment not found");
-  }
-  if (existing.userId !== userId && !isStaff) {
+  const existing = getCommentOnLesson(db, lessonId, commentId);
+  if (existing.userId !== actor.userId && !actor.isStaff) {
     throw new Error("You can only delete your own comments");
   }
   if (existing.deletedAt !== null) {

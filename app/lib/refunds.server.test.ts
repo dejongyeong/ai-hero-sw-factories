@@ -14,8 +14,8 @@ import {
   findPurchaseToRefund,
   getRefundOffer,
   raiseRefundRequest,
-  type Db,
 } from "./refunds.server";
+import type { Db } from "~/db";
 
 const NOW = new Date("2026-11-15T12:00:00Z");
 const daysBefore = (days: number) =>

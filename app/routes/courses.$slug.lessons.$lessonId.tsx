@@ -11,9 +11,9 @@ import {
 } from "~/components/comment-thread";
 import { MAX_COMMENT_LENGTH } from "~/lib/comments";
 import {
+  CommentNotFoundError,
   deleteComment,
   editComment,
-  getCommentById,
   postComment,
 } from "~/lib/comments.server";
 import { db } from "~/db";
@@ -807,6 +807,7 @@ export async function action({ params, request }: Route.ActionArgs) {
     intent === "delete-comment"
   ) {
     const access = await requireContentAccess(request, course.id);
+    const actor = { userId: currentUserId, isStaff: access.isStaff };
 
     try {
       if (intent === "create-comment") {
@@ -829,16 +830,11 @@ export async function action({ params, request }: Route.ActionArgs) {
         if (!parsed.success) {
           return { ok: false, error: "Enter a comment before saving." };
         }
-        // Scope the id to this lesson so a comment elsewhere can't be reached
-        // by posting its id to this route.
-        const existing = getCommentById(db, parsed.data.commentId);
-        if (!existing || existing.lessonId !== lessonId) {
-          throw data("Comment not found", { status: 404 });
-        }
         editComment(
           db,
+          lessonId,
           parsed.data.commentId,
-          currentUserId,
+          actor,
           parsed.data.body
         );
         return { ok: true };
@@ -848,15 +844,15 @@ export async function action({ params, request }: Route.ActionArgs) {
       if (!parsed.success) {
         return { ok: false, error: "Could not delete that comment." };
       }
-      const existing = getCommentById(db, parsed.data.commentId);
-      if (!existing || existing.lessonId !== lessonId) {
-        throw data("Comment not found", { status: 404 });
-      }
-      deleteComment(db, parsed.data.commentId, currentUserId, access.isStaff);
+      deleteComment(db, lessonId, parsed.data.commentId, actor);
       return { ok: true };
     } catch (error) {
+      // A Comment that isn't on this lesson is a 404, not a correctable error.
+      if (error instanceof CommentNotFoundError) {
+        throw data(error.message, { status: 404 });
+      }
       // Service validation failures are user-correctable; anything thrown as a
-      // Response (404 above) should keep bubbling.
+      // Response should keep bubbling.
       if (error instanceof Error) {
         return { ok: false, error: error.message };
       }

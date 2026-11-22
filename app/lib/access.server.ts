@@ -70,6 +70,9 @@ export type Access = {
   canViewContent: boolean;
 };
 
+/** Access for someone known to be signed in. */
+export type SignedInAccess = Access & { userId: number };
+
 const SIGNED_OUT: Access = {
   userId: null,
   user: undefined,
@@ -169,7 +172,7 @@ export async function requireContentAccess(
 export async function requireStaff(
   request: Request,
   courseId: number
-): Promise<Access> {
+): Promise<SignedInAccess> {
   const access = await getAccess(request, courseId);
 
   if (!access.userId) {
@@ -180,7 +183,7 @@ export async function requireStaff(
     throw data("Only this course's instructor can do that.", { status: 403 });
   }
 
-  return access;
+  return { ...access, userId: access.userId };
 }
 
 /**

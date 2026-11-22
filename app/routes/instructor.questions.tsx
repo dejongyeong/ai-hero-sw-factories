@@ -166,7 +166,7 @@ export async function action({ request }: Route.ActionArgs) {
   try {
     postComment(
       db,
-      access.userId!,
+      access.userId,
       question.lessonId,
       question.id,
       parsed.data.body
