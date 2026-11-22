@@ -24,9 +24,18 @@ export type KnockFeedSession = {
 /** One run of a Notification sentence; names and titles are bold. */
 export type SentencePart = { text: string; bold: boolean };
 
+/** The Feed category a Notification is filed under, as shown on its row. */
+export type FeedCategory =
+  | "Discussions"
+  | "Refunds"
+  | "Team"
+  | "Enrollments"
+  | "Lessons";
+
 export type DescribedNotification = {
   sentence: SentencePart[];
   href: string;
+  category: FeedCategory;
 };
 
 /**
@@ -62,6 +71,7 @@ const workflows = {
         { text: data.lesson_title, bold: true },
       ],
       href: data.url,
+      category: "Discussions",
     })
   ),
 } satisfies Record<NotificationWorkflow, unknown>;
