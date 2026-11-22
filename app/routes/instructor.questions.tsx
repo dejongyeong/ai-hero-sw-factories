@@ -164,23 +164,22 @@ export async function action({ request }: Route.ActionArgs) {
   // instructor, or an admin.
   const access = await requireStaff(request, course.courseId);
 
-  let reply;
   try {
-    reply = postComment(
+    const reply = postComment(
       db,
       access.userId,
       question.lessonId,
       question.id,
       parsed.data.body
     );
+    // Never throws, so it can't be mistaken for a failed post.
+    await notifyCommentReply(db, reply.id);
   } catch (error) {
     if (error instanceof Error) {
       return { ok: false, error: error.message };
     }
     throw error;
   }
-
-  await notifyCommentReply(db, reply.id);
 
   return { ok: true };
 }
