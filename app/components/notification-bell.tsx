@@ -137,8 +137,9 @@ function BellPopover({
     };
   }, [open]);
 
+  // Anchored to the bell: the popover opens beside it, clear of the sidebar.
   return (
-    <>
+    <div className="relative">
       <button
         ref={buttonRef}
         type="button"
@@ -163,7 +164,7 @@ function BellPopover({
           ref={panelRef}
           role="dialog"
           aria-label="Notifications"
-          className="fixed left-[calc(14rem+8px)] top-2 z-40 flex max-h-[min(640px,calc(100vh-1rem))] w-[400px] flex-col overflow-hidden rounded-xl border bg-popover text-popover-foreground shadow-2xl"
+          className="absolute left-full top-0 z-40 ml-6 flex max-h-[min(640px,calc(100vh-2rem))] w-[400px] flex-col overflow-hidden rounded-xl border bg-popover text-popover-foreground shadow-2xl"
         >
           <header className="border-b px-4 py-3">
             <h2 className="text-base font-semibold">Notifications</h2>
@@ -171,7 +172,7 @@ function BellPopover({
           {typeof body === "function" ? body(close) : body}
         </div>
       )}
-    </>
+    </div>
   );
 }
 
