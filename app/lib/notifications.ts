@@ -49,21 +49,30 @@ function workflow<S extends z.ZodTypeAny>(
 ) {
   return {
     data,
-    describe(raw: unknown, activityCount: number): DescribedNotification | null {
+    describe(
+      raw: unknown,
+      activityCount: number
+    ): DescribedNotification | null {
       const parsed = data.safeParse(raw);
       return parsed.success ? describe(parsed.data, activityCount) : null;
     },
   };
 }
 
+/**
+ * What every Notification about a Comment carries: the Comment (so deleting it
+ * archives the Notification), who posted it, where, and a link to it.
+ */
+const commentNotificationData = z.object({
+  comment_id: z.number().int(),
+  actor_name: z.string(),
+  lesson_title: z.string(),
+  url: z.string().startsWith("/"),
+});
+
 const workflows = {
   [NotificationWorkflow.CommentReply]: workflow(
-    z.object({
-      comment_id: z.number().int(),
-      actor_name: z.string(),
-      lesson_title: z.string(),
-      url: z.string().startsWith("/"),
-    }),
+    commentNotificationData,
     (data) => ({
       sentence: [
         { text: data.actor_name, bold: true },
@@ -75,13 +84,8 @@ const workflows = {
     })
   ),
   [NotificationWorkflow.NewQuestion]: workflow(
-    z.object({
-      comment_id: z.number().int(),
-      lesson_id: z.number().int(),
-      actor_name: z.string(),
-      lesson_title: z.string(),
-      url: z.string().startsWith("/"),
-    }),
+    // `lesson_id` is the batch key.
+    commentNotificationData.extend({ lesson_id: z.number().int() }),
     (data, activityCount) => ({
       sentence:
         activityCount > 1

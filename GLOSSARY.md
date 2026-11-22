@@ -122,7 +122,7 @@ Anything posted in a lesson's discussion: a Question, a Reply, or a top-level po
 _Avoid_: Post, Message
 
 **Question**:
-A top-level Comment on a lesson by anyone other than the course's Instructor or a Platform Admin. The course's Instructor gets a Notification for each one; Platform Admins can answer it but are not notified.
+A top-level Comment on a lesson by anyone other than the course's Instructor or a Platform Admin. The course's Instructor is told of it by a New question, batched per lesson over 10 minutes; Platform Admins can answer it but are not notified.
 _Avoid_: Comment (on its own), Thread, Post, Top-level comment
 
 **Reply**:
@@ -146,3 +146,11 @@ _Avoid_: Alert, Message, Activity
 **Notification Feed**:
 The list of a person's Notifications, read inside Cadence.
 _Avoid_: Inbox, Notification centre, Activity feed
+
+**Comment reply**:
+The Notification telling the author of a Comment that someone else posted a Reply under it. It disappears from the Feed if the Reply is deleted.
+_Avoid_: Reply notification, Reply alert
+
+**New question**:
+The Notification telling a course's Instructor that a Question was asked on one of their lessons, batched per lesson over 10 minutes so a burst reads as one, such as "3 new questions on Generics". It disappears from the Feed if any Question in it is deleted.
+_Avoid_: Question notification, New comment

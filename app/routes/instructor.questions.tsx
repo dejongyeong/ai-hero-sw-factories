@@ -14,7 +14,7 @@ import { AlertTriangle, CheckCircle2, ExternalLink } from "lucide-react";
 import { cn, daysSince, formatRelativeTime } from "~/lib/utils";
 import { MAX_COMMENT_LENGTH } from "~/lib/comments";
 import { getCommentById, postComment } from "~/lib/comments.server";
-import { notifyCommentReply } from "~/lib/notify.server";
+import { notifyCommentPosted } from "~/lib/notify.server";
 import { parseFormData } from "~/lib/validation";
 import { db } from "~/db";
 import {
@@ -173,7 +173,7 @@ export async function action({ request }: Route.ActionArgs) {
       parsed.data.body
     );
     // Never throws, so it can't be mistaken for a failed post.
-    await notifyCommentReply(db, reply.id);
+    await notifyCommentPosted(db, reply.id);
   } catch (error) {
     if (error instanceof Error) {
       return { ok: false, error: error.message };
