@@ -2,6 +2,17 @@ import { describe, expect, it } from "vitest";
 import { describeNotification } from "./notifications";
 
 describe("describeNotification", () => {
+  it("files a Comment reply under Discussions", () => {
+    expect(
+      describeNotification("comment-reply", {
+        comment_id: 7,
+        actor_name: "Sarah",
+        lesson_title: "Generics",
+        url: "/courses/intro-ts/lessons/3#comment-7",
+      })?.category
+    ).toBe("Discussions");
+  });
+
   it("describes a Comment reply with its sentence and link", () => {
     expect(
       describeNotification("comment-reply", {
@@ -17,6 +28,7 @@ describe("describeNotification", () => {
         { text: "Generics", bold: true },
       ],
       href: "/courses/intro-ts/lessons/3#comment-7",
+      category: "Discussions",
     });
   });
 

@@ -24,9 +24,16 @@ export type KnockFeedSession = {
 /** One run of a Notification sentence; names and titles are bold. */
 export type SentencePart = { text: string; bold: boolean };
 
+/**
+ * The Feed category a Notification is filed under, as shown on its row. Each
+ * new workflow adds its category here.
+ */
+export type FeedCategory = "Discussions";
+
 export type DescribedNotification = {
   sentence: SentencePart[];
   href: string;
+  category: FeedCategory;
 };
 
 /**
@@ -62,6 +69,7 @@ const workflows = {
         { text: data.lesson_title, bold: true },
       ],
       href: data.url,
+      category: "Discussions",
     })
   ),
 } satisfies Record<NotificationWorkflow, unknown>;
@@ -71,7 +79,10 @@ export type NotificationData<W extends NotificationWorkflow> = z.infer<
   (typeof workflows)[W]["data"]
 >;
 
-function isNotificationWorkflow(key: string): key is NotificationWorkflow {
+/** Whether a Feed item's workflow key is one Cadence knows. */
+export function isNotificationWorkflow(
+  key: string
+): key is NotificationWorkflow {
   return Object.hasOwn(workflows, key);
 }
 
