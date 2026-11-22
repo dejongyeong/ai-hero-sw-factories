@@ -19,6 +19,7 @@ import {
   Settings,
   ReceiptText,
 } from "lucide-react";
+import { NotificationBell } from "~/components/notification-bell";
 
 interface CurrentUser {
   id: number;
@@ -41,6 +42,8 @@ interface SidebarProps {
   currentUser: CurrentUser | null;
   recentCourses?: RecentCourse[];
   isTeamAdmin?: boolean;
+  /** True when the person's Knock Feed is connected; otherwise the bell shows an empty Feed. */
+  notificationsLive?: boolean;
 }
 
 interface NavItem {
@@ -117,6 +120,7 @@ export function Sidebar({
   currentUser,
   recentCourses = [],
   isTeamAdmin = false,
+  notificationsLive = false,
 }: SidebarProps) {
   const currentUserRole = currentUser?.role ?? null;
   const [isDark, setIsDark] = useState(false);
@@ -140,6 +144,11 @@ export function Sidebar({
         <NavLink to="/" className="text-lg font-bold tracking-tight">
           Cadence
         </NavLink>
+        {currentUser && (
+          <div className="ml-auto">
+            <NotificationBell live={notificationsLive} />
+          </div>
+        )}
       </div>
 
       <nav className="flex-1 space-y-1 p-3">
