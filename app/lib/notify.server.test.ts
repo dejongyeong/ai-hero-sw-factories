@@ -150,7 +150,7 @@ describe("notifyCommentReply", () => {
     expect(triggers).toEqual([]);
   });
 
-  it("carries what the Feed needs to link to the Reply", async () => {
+  it("carries only the Reply id and what the Feed needs to link to it", async () => {
     const question = postComment(db, student.id, lessonId, null, "Why?");
     const reply = postComment(
       db,
@@ -163,7 +163,8 @@ describe("notifyCommentReply", () => {
 
     await notifyCommentReply(db, reply.id, transport);
 
-    expect(triggers[0].data).toMatchObject({
+    expect(triggers[0].data).toEqual({
+      comment_id: reply.id,
       actor_name: "Sarah",
       lesson_title: "Generics",
       url: `/courses/intro-ts/lessons/${lessonId}#comment-${reply.id}`,

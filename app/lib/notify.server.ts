@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { Knock } from "@knocklabs/node";
 import { eq } from "drizzle-orm";
 import type { Db } from "~/db";
-import { comments, courses, lessons, modules, users } from "~/db/schema";
+import { courses, lessons, modules, users } from "~/db/schema";
 import { knockConfig, knockUserId } from "~/lib/knock.server";
 import { getCommentById } from "~/lib/comments.server";
 import { commentHref, NotificationWorkflow } from "~/lib/notifications";
@@ -80,7 +80,6 @@ function getLessonWithCourse(db: Db, lessonId: number) {
     .select({
       lessonId: lessons.id,
       lessonTitle: lessons.title,
-      courseTitle: courses.title,
       courseSlug: courses.slug,
     })
     .from(lessons)
@@ -116,11 +115,7 @@ export async function notifyCommentReply(
     const reply = getCommentById(db, replyId);
     if (!reply || reply.parentId === null) return;
 
-    const parent = db
-      .select()
-      .from(comments)
-      .where(eq(comments.id, reply.parentId))
-      .get();
+    const parent = getCommentById(db, reply.parentId);
     if (!parent || parent.userId === reply.userId) return;
 
     const replier = getUser(db, reply.userId);
@@ -135,12 +130,8 @@ export async function notifyCommentReply(
         actor: recipientFor(replier),
         data: {
           comment_id: reply.id,
-          parent_comment_id: parent.id,
           actor_name: replier.name,
-          lesson_id: lesson.lessonId,
           lesson_title: lesson.lessonTitle,
-          course_title: lesson.courseTitle,
-          course_slug: lesson.courseSlug,
           url: commentHref(lesson.courseSlug, lesson.lessonId, reply.id),
         },
       }
