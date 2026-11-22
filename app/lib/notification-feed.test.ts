@@ -84,19 +84,19 @@ describe("popoverPage", () => {
 
 describe("feedBody", () => {
   it("shows skeleton rows until the first fetch finishes, never the empty state", () => {
-    expect(feedBody({ fetched: false, count: 0, unreadOnly: false })).toEqual({
+    expect(feedBody({ load: "pending", count: 0, unreadOnly: false })).toEqual({
       kind: "loading",
     });
   });
 
   it("shows rows as soon as there are any, even mid-fetch", () => {
-    expect(feedBody({ fetched: false, count: 3, unreadOnly: false })).toEqual({
+    expect(feedBody({ load: "pending", count: 3, unreadOnly: false })).toEqual({
       kind: "rows",
     });
   });
 
   it("says there are no Notifications yet once a fetch comes back empty", () => {
-    expect(feedBody({ fetched: true, count: 0, unreadOnly: false })).toEqual({
+    expect(feedBody({ load: "loaded", count: 0, unreadOnly: false })).toEqual({
       kind: "empty",
       title: "No Notifications yet",
       detail:
@@ -104,8 +104,22 @@ describe("feedBody", () => {
     });
   });
 
+  it("says the Feed couldn't load when the fetch fails, never that it's empty", () => {
+    expect(feedBody({ load: "failed", count: 0, unreadOnly: false })).toEqual({
+      kind: "error",
+      title: "Couldn't load Notifications.",
+      detail: "Try again in a moment.",
+    });
+  });
+
+  it("keeps showing rows already loaded if a later fetch fails", () => {
+    expect(feedBody({ load: "failed", count: 3, unreadOnly: false })).toEqual({
+      kind: "rows",
+    });
+  });
+
   it("says you're all caught up when the Unread filter finds nothing", () => {
-    expect(feedBody({ fetched: true, count: 0, unreadOnly: true })).toEqual({
+    expect(feedBody({ load: "loaded", count: 0, unreadOnly: true })).toEqual({
       kind: "empty",
       title: "You're all caught up",
       detail: "Nothing unread here.",

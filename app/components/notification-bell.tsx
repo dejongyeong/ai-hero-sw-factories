@@ -8,6 +8,7 @@ import {
 } from "@knocklabs/react";
 import type { FeedItem } from "@knocklabs/client";
 import {
+  AlertCircle,
   Bell,
   BellOff,
   Check,
@@ -18,6 +19,7 @@ import {
 import { cn, formatRelativeTime } from "~/lib/utils";
 import {
   describeNotification,
+  isNotificationWorkflow,
   NotificationWorkflow,
   type KnockFeedSession,
 } from "~/lib/notifications";
@@ -29,12 +31,14 @@ import {
   popoverPage,
   showsKnockBranding,
   type FeedBody,
+  type FeedLoad,
+  type PopoverPage,
 } from "~/lib/notification-feed";
 
 // ─── Notification Feed: the bell and its popover ───
-// Built from Knock's feed hooks, not its stock components, so it looks like
-// Cadence ("Variant D"). With no Knock session (no keys configured, or signed
-// out) the bell still renders and the popover shows the empty Feed.
+// Built from Knock's feed hooks, not its stock components, so it matches
+// Cadence's own UI. With no Knock session (no keys configured, or signed out)
+// the bell still renders and the popover shows the empty Feed.
 
 /**
  * Connects the page to the person's Knock Feed. Without a session it renders
@@ -71,13 +75,18 @@ export function NotificationBell({ live }: { live: boolean }) {
   ) : (
     <BellPopover unreadCount={0}>
       {(close) => (
-        <>
-          <PopoverHeader unreadCount={0} onMarkAllRead={null} />
+        <PopoverPanel
+          unreadCount={0}
+          onMarkAllRead={null}
+          onClose={close}
+          branding={false}
+        >
+          {/* No live Feed, so never any rows. */}
           <FeedBodyView
-            body={feedBody({ fetched: true, count: 0, unreadOnly: false })}
+            body={feedBody({ load: "loaded", count: 0, unreadOnly: false })}
+            renderRows={() => null}
           />
-          <PopoverFooter onClose={close} branding={false} />
-        </>
+        </PopoverPanel>
       )}
     </BellPopover>
   );
@@ -87,18 +96,25 @@ function LiveBell() {
   const { feedClient, useFeedStore } = useKnockFeed();
   // Unread, not unseen: the count stays until a Notification is read.
   const unreadCount = useFeedStore((state) => state.metadata.unread_count);
-  const [fetched, setFetched] = useState(false);
+  const [load, setLoad] = useState<FeedLoad>("pending");
+  // Fetched once here, not on every open, so the footer doesn't pop in late.
+  const { settings } = useFeedSettings(feedClient);
 
   useEffect(() => {
     let cancelled = false;
-    feedClient
-      .fetch()
-      .catch((error: unknown) =>
-        console.error("Could not load the Feed", error)
-      )
-      .finally(() => {
-        if (!cancelled) setFetched(true);
-      });
+    // Knock reports a failed fetch as { status: "error" } rather than throwing.
+    feedClient.fetch().then(
+      (result) => {
+        if (result?.status !== "ok") {
+          console.error("Could not load the Feed", result?.data);
+        }
+        if (!cancelled) setLoad(result?.status === "ok" ? "loaded" : "failed");
+      },
+      (error: unknown) => {
+        console.error("Could not load the Feed", error);
+        if (!cancelled) setLoad("failed");
+      }
+    );
     return () => {
       cancelled = true;
     };
@@ -106,16 +122,22 @@ function LiveBell() {
 
   return (
     <BellPopover unreadCount={unreadCount}>
-      {(close) => <LivePanel fetched={fetched} onClose={close} />}
+      {(close) => (
+        <LivePanel load={load} settings={settings} onClose={close} />
+      )}
     </BellPopover>
   );
 }
 
+type FeedSettings = ReturnType<typeof useFeedSettings>["settings"];
+
 function LivePanel({
-  fetched,
+  load,
+  settings,
   onClose,
 }: {
-  fetched: boolean;
+  load: FeedLoad;
+  settings: FeedSettings;
   onClose: () => void;
 }) {
   const { feedClient, useFeedStore } = useKnockFeed();
@@ -123,12 +145,10 @@ function LivePanel({
   const metadata = useFeedStore((state) => state.metadata);
   const hasMore = useFeedStore((state) => Boolean(state.pageInfo.after));
   const networkStatus = useFeedStore((state) => state.networkStatus);
-  const { settings } = useFeedSettings(feedClient);
   const navigate = useNavigate();
 
   // The Unread filter arrives with the filter chips; until then it's off.
-  const body = feedBody({ fetched, count: items.length, unreadOnly: false });
-  const page = popoverPage(items, { total: metadata.total_count, hasMore });
+  const body = feedBody({ load, count: items.length, unreadOnly: false });
 
   const markAllRead = () => {
     feedClient
@@ -138,38 +158,64 @@ function LivePanel({
       );
   };
 
+  const markRead = (item: FeedItem) => {
+    feedClient
+      .markAsRead(item)
+      .catch((error: unknown) =>
+        console.error("Could not mark the Notification read", error)
+      );
+  };
+
+  return (
+    <PopoverPanel
+      unreadCount={metadata.unread_count}
+      onMarkAllRead={markAllRead}
+      onClose={onClose}
+      branding={showsKnockBranding(settings, body)}
+    >
+      <FeedBodyView
+        body={body}
+        renderRows={() => (
+          <FeedRows
+            page={popoverPage(items, { total: metadata.total_count, hasMore })}
+            canFetch={networkStatus === "ready"}
+            loadingMore={networkStatus === "fetchMore"}
+            onLoadMore={(pageSize) => {
+              void feedClient.fetchNextPage({ page_size: pageSize });
+            }}
+            onOpen={(item, href) => {
+              markRead(item);
+              onClose();
+              if (href) void navigate(href);
+            }}
+            onMarkRead={markRead}
+          />
+        )}
+      />
+    </PopoverPanel>
+  );
+}
+
+/** The popover's header and pinned footer around whatever body it shows. */
+function PopoverPanel({
+  unreadCount,
+  onMarkAllRead,
+  onClose,
+  branding,
+  children,
+}: {
+  unreadCount: number;
+  /** Null when there's no live Feed to mark. */
+  onMarkAllRead: (() => void) | null;
+  onClose: () => void;
+  branding: boolean;
+  children: React.ReactNode;
+}) {
   return (
     <>
-      <PopoverHeader
-        unreadCount={metadata.unread_count}
-        onMarkAllRead={markAllRead}
-      />
-      {body.kind === "rows" ? (
-        <FeedRows
-          items={page.visible}
-          nextPageSize={page.nextPageSize}
-          canFetch={networkStatus === "ready"}
-          loadingMore={networkStatus === "fetchMore"}
-          capNote={page.capNote}
-          onLoadMore={(pageSize) => {
-            void feedClient.fetchNextPage({ page_size: pageSize });
-          }}
-          onOpen={(item, href) => {
-            void feedClient.markAsRead(item);
-            onClose();
-            if (href) void navigate(href);
-          }}
-          onMarkRead={(item) => {
-            void feedClient.markAsRead(item);
-          }}
-        />
-      ) : (
-        <FeedBodyView body={body} />
-      )}
-      <PopoverFooter
-        onClose={onClose}
-        branding={showsKnockBranding(settings, body)}
-      />
+      <PopoverHeader unreadCount={unreadCount} onMarkAllRead={onMarkAllRead} />
+      {children}
+      <PopoverFooter onClose={onClose} branding={branding} />
     </>
   );
 }
@@ -301,37 +347,58 @@ function PopoverFooter({
   );
 }
 
-/** The body when there are no rows to show: skeleton rows or an empty state. */
-function FeedBodyView({ body }: { body: FeedBody }) {
-  if (body.kind === "rows") return null;
-  if (body.kind === "loading") return <FeedSkeleton />;
+/** The popover's body: rows, skeleton rows, an empty state or an error. */
+function FeedBodyView({
+  body,
+  renderRows,
+}: {
+  body: FeedBody;
+  renderRows: () => React.ReactNode;
+}) {
+  switch (body.kind) {
+    case "rows":
+      return renderRows();
+    case "loading":
+      return <FeedSkeleton />;
+    case "empty":
+      return <FeedMessage icon={BellOff} {...body} />;
+    case "error":
+      return <FeedMessage icon={AlertCircle} {...body} />;
+  }
+}
+
+function FeedMessage({
+  icon: Icon,
+  title,
+  detail,
+}: {
+  icon: React.ComponentType<{ className?: string }>;
+  title: string;
+  detail: string;
+}) {
   return (
     <div className="flex flex-col items-center px-8 py-14 text-center">
       <div className="mb-3 rounded-full bg-muted p-3">
-        <BellOff className="size-6 text-muted-foreground" />
+        <Icon className="size-6 text-muted-foreground" />
       </div>
-      <p className="font-medium">{body.title}</p>
-      <p className="mt-1 text-sm text-muted-foreground">{body.detail}</p>
+      <p className="font-medium">{title}</p>
+      <p className="mt-1 text-sm text-muted-foreground">{detail}</p>
     </div>
   );
 }
 
 /** Rows grouped under sticky Today / Yesterday / Earlier headers, loaded on scroll. */
 function FeedRows({
-  items,
-  nextPageSize,
+  page,
   canFetch,
   loadingMore,
-  capNote,
   onLoadMore,
   onOpen,
   onMarkRead,
 }: {
-  items: FeedItem[];
-  nextPageSize: number | null;
+  page: PopoverPage<FeedItem>;
   canFetch: boolean;
   loadingMore: boolean;
-  capNote: string | null;
   onLoadMore: (pageSize: number) => void;
   onOpen: (item: FeedItem, href: string | null) => void;
   onMarkRead: (item: FeedItem) => void;
@@ -340,6 +407,7 @@ function FeedRows({
   const sentinelRef = useRef<HTMLDivElement>(null);
   const onLoadMoreRef = useRef(onLoadMore);
   onLoadMoreRef.current = onLoadMore;
+  const { visible: items, nextPageSize, capNote } = page;
 
   // Load the next page as the bottom scrolls into view, up to the cap.
   useEffect(() => {
@@ -384,14 +452,18 @@ function FeedRows({
   );
 }
 
-const ROW_ICONS: Record<string, { icon: React.ReactNode; tone: string }> = {
+type RowIcon = { icon: React.ReactNode; tone: string };
+
+// Every workflow needs an icon: adding one to NotificationWorkflow fails the
+// type check here until it has one.
+const ROW_ICONS = {
   [NotificationWorkflow.CommentReply]: {
     icon: <MessageSquareReply className="size-4" />,
     tone: "bg-sky-100 text-sky-600 dark:bg-sky-950",
   },
-};
+} satisfies Record<NotificationWorkflow, RowIcon>;
 
-const FALLBACK_ICON = {
+const FALLBACK_ICON: RowIcon = {
   icon: <Bell className="size-4" />,
   tone: "bg-muted text-muted-foreground",
 };
@@ -406,7 +478,9 @@ function FeedRow({
   onMarkRead: (item: FeedItem) => void;
 }) {
   const described = describeNotification(item.source.key, item.data);
-  const { icon, tone } = ROW_ICONS[item.source.key] ?? FALLBACK_ICON;
+  const { icon, tone } = isNotificationWorkflow(item.source.key)
+    ? ROW_ICONS[item.source.key]
+    : FALLBACK_ICON;
   const unread = item.read_at === null;
 
   return (
