@@ -53,7 +53,10 @@ export function outboxTransport(directory: string): NotificationTransport {
   return {
     async trigger(workflowKey, trigger) {
       mkdirSync(directory, { recursive: true });
-      const file = join(directory, `${Date.now()}-notification-${workflowKey}.json`);
+      const file = join(
+        directory,
+        `${Date.now()}-notification-${workflowKey}.json`
+      );
       writeFileSync(file, JSON.stringify({ workflowKey, ...trigger }, null, 2));
     },
   };

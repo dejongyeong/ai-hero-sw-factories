@@ -1,4 +1,5 @@
 import { signUserToken } from "@knocklabs/node";
+import type { KnockFeedSession } from "~/lib/notifications";
 
 // ─── Knock configuration ───
 // Knock sends every Notification (ADR 0013). Its keys come from .env, which
@@ -37,14 +38,6 @@ export function knockConfig() {
 export function knockUserId(userId: number) {
   return `cadence-${userId}`;
 }
-
-/** What the browser needs to open a person's Notification Feed. */
-export type KnockFeedSession = {
-  userId: string;
-  userToken: string;
-  publicKey: string;
-  feedChannelId: string;
-};
 
 const USER_TOKEN_SECONDS = 60 * 60;
 

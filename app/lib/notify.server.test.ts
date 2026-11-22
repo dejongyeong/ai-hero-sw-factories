@@ -37,7 +37,11 @@ beforeEach(() => {
 
   instructor = db
     .insert(schema.users)
-    .values({ name: "Sarah", email: "sarah@example.com", role: UserRole.Instructor })
+    .values({
+      name: "Sarah",
+      email: "sarah@example.com",
+      role: UserRole.Instructor,
+    })
     .returning()
     .get();
   student = db
@@ -84,7 +88,13 @@ beforeEach(() => {
 describe("notifyCommentReply", () => {
   it("sends Comment reply to the author of the parent Comment", async () => {
     const question = postComment(db, student.id, lessonId, null, "Why?");
-    const reply = postComment(db, instructor.id, lessonId, question.id, "Because.");
+    const reply = postComment(
+      db,
+      instructor.id,
+      lessonId,
+      question.id,
+      "Because."
+    );
     const { transport, triggers } = recordingTransport();
 
     await notifyCommentReply(db, reply.id, transport);
@@ -99,7 +109,13 @@ describe("notifyCommentReply", () => {
 
   it("sends Comment reply for a Reply by another Student too", async () => {
     const question = postComment(db, student.id, lessonId, null, "Why?");
-    const reply = postComment(db, otherStudent.id, lessonId, question.id, "Same here.");
+    const reply = postComment(
+      db,
+      otherStudent.id,
+      lessonId,
+      question.id,
+      "Same here."
+    );
     const { transport, triggers } = recordingTransport();
 
     await notifyCommentReply(db, reply.id, transport);
@@ -111,7 +127,13 @@ describe("notifyCommentReply", () => {
 
   it("sends nothing for a Reply to one's own Comment", async () => {
     const question = postComment(db, student.id, lessonId, null, "Why?");
-    const reply = postComment(db, student.id, lessonId, question.id, "Never mind.");
+    const reply = postComment(
+      db,
+      student.id,
+      lessonId,
+      question.id,
+      "Never mind."
+    );
     const { transport, triggers } = recordingTransport();
 
     await notifyCommentReply(db, reply.id, transport);
@@ -130,7 +152,13 @@ describe("notifyCommentReply", () => {
 
   it("carries what the Feed needs to link to the Reply", async () => {
     const question = postComment(db, student.id, lessonId, null, "Why?");
-    const reply = postComment(db, instructor.id, lessonId, question.id, "Because.");
+    const reply = postComment(
+      db,
+      instructor.id,
+      lessonId,
+      question.id,
+      "Because."
+    );
     const { transport, triggers } = recordingTransport();
 
     await notifyCommentReply(db, reply.id, transport);
@@ -144,7 +172,13 @@ describe("notifyCommentReply", () => {
 
   it("does not throw when the transport fails", async () => {
     const question = postComment(db, student.id, lessonId, null, "Why?");
-    const reply = postComment(db, instructor.id, lessonId, question.id, "Because.");
+    const reply = postComment(
+      db,
+      instructor.id,
+      lessonId,
+      question.id,
+      "Because."
+    );
     const failing: NotificationTransport = {
       async trigger() {
         throw new Error("Knock is down");
@@ -162,7 +196,9 @@ describe("outboxTransport", () => {
     const directory = mkdtempSync(join(tmpdir(), "outbox-"));
 
     await outboxTransport(directory).trigger("comment-reply", {
-      recipients: [{ id: "cadence-1", name: "Liam", email: "liam@example.com" }],
+      recipients: [
+        { id: "cadence-1", name: "Liam", email: "liam@example.com" },
+      ],
       data: { comment_id: 42 },
     });
 
@@ -171,7 +207,9 @@ describe("outboxTransport", () => {
     const written = JSON.parse(readFileSync(join(directory, files[0]), "utf8"));
     expect(written).toMatchObject({
       workflowKey: "comment-reply",
-      recipients: [{ id: "cadence-1", name: "Liam", email: "liam@example.com" }],
+      recipients: [
+        { id: "cadence-1", name: "Liam", email: "liam@example.com" },
+      ],
       data: { comment_id: 42 },
     });
   });
