@@ -8,7 +8,7 @@ import { Textarea } from "~/components/ui/textarea";
 import { UserAvatar } from "~/components/user-avatar";
 import { cn, formatRelativeTime } from "~/lib/utils";
 import { MAX_COMMENT_LENGTH } from "~/lib/comments";
-import { commentAnchor } from "~/lib/notifications";
+import { commentAnchor } from "~/lib/comment-links";
 
 // Bodies arrive pre-rendered from the server (renderComment), because comments
 // are untrusted markdown and the sanitising renderer is server-only.

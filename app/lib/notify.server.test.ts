@@ -7,6 +7,7 @@ import { CourseStatus, UserRole } from "~/db/schema";
 import type { Db } from "~/db";
 import { createTestDb } from "~/test/setup";
 import { postComment } from "./comments.server";
+import type { NotificationWorkflow } from "./notifications";
 import {
   notifyCommentReply,
   outboxTransport,
@@ -14,7 +15,7 @@ import {
   type NotificationTrigger,
 } from "./notify.server";
 
-type Recorded = { workflowKey: string } & NotificationTrigger;
+type Recorded = { workflowKey: NotificationWorkflow } & NotificationTrigger;
 
 function recordingTransport() {
   const triggers: Recorded[] = [];
@@ -193,6 +194,13 @@ describe("notifyCommentReply", () => {
 });
 
 describe("outboxTransport", () => {
+  const commentReplyData = {
+    comment_id: 42,
+    actor_name: "Sarah",
+    lesson_title: "Generics",
+    url: "/courses/intro-ts/lessons/3#comment-42",
+  };
+
   it("writes the trigger to the outbox when there is no Knock key", async () => {
     const directory = mkdtempSync(join(tmpdir(), "outbox-"));
 
@@ -200,7 +208,7 @@ describe("outboxTransport", () => {
       recipients: [
         { id: "cadence-1", name: "Liam", email: "liam@example.com" },
       ],
-      data: { comment_id: 42 },
+      data: commentReplyData,
     });
 
     const files = readdirSync(directory);
@@ -211,7 +219,7 @@ describe("outboxTransport", () => {
       recipients: [
         { id: "cadence-1", name: "Liam", email: "liam@example.com" },
       ],
-      data: { comment_id: 42 },
+      data: commentReplyData,
     });
   });
 });

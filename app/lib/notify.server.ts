@@ -6,7 +6,11 @@ import type { Db } from "~/db";
 import { courses, lessons, modules, users } from "~/db/schema";
 import { knockConfig, knockUserId } from "~/lib/knock.server";
 import { getCommentById } from "~/lib/comments.server";
-import { commentHref, NotificationWorkflow } from "~/lib/notifications";
+import { commentHref } from "~/lib/comment-links";
+import {
+  NotificationWorkflow,
+  type NotificationData,
+} from "~/lib/notifications";
 
 // ─── Notifications ───
 // One function per Notification, called from the action that causes it, after
@@ -19,28 +23,36 @@ import { commentHref, NotificationWorkflow } from "~/lib/notifications";
 // A Notification never fails the action that caused it: every function here
 // catches and logs instead of throwing.
 
-/** A person identified inline on a trigger, so Knock needs no separate sync. */
-export type NotificationRecipient = {
+/**
+ * A person on a trigger, as a recipient or the actor, identified inline so
+ * Knock needs no separate sync.
+ */
+export type NotificationPerson = {
   id: string;
   name: string;
   email: string;
 };
 
-export type NotificationTrigger = {
-  recipients: NotificationRecipient[];
-  actor?: NotificationRecipient;
-  data: Record<string, unknown>;
+export type NotificationTrigger<
+  W extends NotificationWorkflow = NotificationWorkflow,
+> = {
+  recipients: NotificationPerson[];
+  actor?: NotificationPerson;
+  data: NotificationData<W>;
 };
 
 export interface NotificationTransport {
-  trigger(workflowKey: string, trigger: NotificationTrigger): Promise<void>;
+  trigger<W extends NotificationWorkflow>(
+    workflow: W,
+    trigger: NotificationTrigger<W>
+  ): Promise<void>;
 }
 
 export function knockTransport(secretKey: string): NotificationTransport {
   const knock = new Knock({ apiKey: secretKey });
   return {
-    async trigger(workflowKey, trigger) {
-      await knock.workflows.trigger(workflowKey, {
+    async trigger(workflow, trigger) {
+      await knock.workflows.trigger(workflow, {
         recipients: trigger.recipients,
         actor: trigger.actor,
         data: trigger.data,
@@ -67,7 +79,7 @@ function defaultTransport(): NotificationTransport {
   return secretKey ? knockTransport(secretKey) : outboxTransport(".outbox");
 }
 
-function recipientFor(user: { id: number; name: string; email: string }) {
+function personFor(user: { id: number; name: string; email: string }) {
   return { id: knockUserId(user.id), name: user.name, email: user.email };
 }
 
@@ -91,7 +103,7 @@ function getLessonWithCourse(db: Db, lessonId: number) {
 
 /** Runs one Notification, logging rather than throwing if anything fails. */
 async function deliver(
-  notification: string,
+  notification: NotificationWorkflow,
   build: () => Promise<void>
 ): Promise<void> {
   try {
@@ -126,8 +138,8 @@ export async function notifyCommentReply(
     await (transport ?? defaultTransport()).trigger(
       NotificationWorkflow.CommentReply,
       {
-        recipients: [recipientFor(parentAuthor)],
-        actor: recipientFor(replier),
+        recipients: [personFor(parentAuthor)],
+        actor: personFor(replier),
         data: {
           comment_id: reply.id,
           actor_name: replier.name,

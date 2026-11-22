@@ -1,9 +1,10 @@
 import { z } from "zod";
 
 // ─── Notifications, shared by server and browser ───
-// The Knock workflow key for each Notification, and how a Feed item turns
-// back into a sentence and a link. The server puts these ids in the trigger
-// data (see notify.server.ts); the Feed reads them back out.
+// The Knock workflow key for each Notification, the trigger data it carries,
+// and how a Feed item turns back into a sentence and a link. The server sends
+// NotificationData (see notify.server.ts); the Feed parses it back with the
+// same schema, so the two can't drift apart.
 
 export const NotificationWorkflow = {
   CommentReply: "comment-reply",
@@ -20,11 +21,6 @@ export type KnockFeedSession = {
   feedChannelId: string;
 };
 
-/** The DOM id a Comment is rendered with, so a link can land on it. */
-export function commentAnchor(commentId: number) {
-  return `comment-${commentId}`;
-}
-
 /** One run of a Notification sentence; names and titles are bold. */
 export type SentencePart = { text: string; bold: boolean };
 
@@ -33,40 +29,60 @@ export type DescribedNotification = {
   href: string;
 };
 
-const commentReplyData = z.object({
-  actor_name: z.string(),
-  lesson_title: z.string(),
-  url: z.string().startsWith("/"),
-});
+/**
+ * Pairs a workflow's trigger data schema with how to describe it. `describe`
+ * takes raw Feed data, because Feed data comes from Knock and is parsed, not
+ * trusted; it returns null for anything it can't read.
+ */
+function workflow<S extends z.ZodTypeAny>(
+  data: S,
+  describe: (data: z.infer<S>) => DescribedNotification
+) {
+  return {
+    data,
+    describe(raw: unknown): DescribedNotification | null {
+      const parsed = data.safeParse(raw);
+      return parsed.success ? describe(parsed.data) : null;
+    },
+  };
+}
+
+const workflows = {
+  [NotificationWorkflow.CommentReply]: workflow(
+    z.object({
+      comment_id: z.number().int(),
+      actor_name: z.string(),
+      lesson_title: z.string(),
+      url: z.string().startsWith("/"),
+    }),
+    (data) => ({
+      sentence: [
+        { text: data.actor_name, bold: true },
+        { text: " replied to your Comment on ", bold: false },
+        { text: data.lesson_title, bold: true },
+      ],
+      href: data.url,
+    })
+  ),
+} satisfies Record<NotificationWorkflow, unknown>;
+
+/** The trigger data a workflow carries, as the server sends it. */
+export type NotificationData<W extends NotificationWorkflow> = z.infer<
+  (typeof workflows)[W]["data"]
+>;
+
+function isNotificationWorkflow(key: string): key is NotificationWorkflow {
+  return Object.hasOwn(workflows, key);
+}
 
 /**
  * Turns a Feed item's workflow key and trigger data back into its sentence and
- * link. Feed data comes from Knock, so it is parsed, not trusted. Returns null
- * for anything it can't read.
+ * link. Returns null for an unknown workflow or data it can't read.
  */
 export function describeNotification(
   workflowKey: string,
   data: unknown
 ): DescribedNotification | null {
-  if (workflowKey === NotificationWorkflow.CommentReply) {
-    const parsed = commentReplyData.safeParse(data);
-    if (!parsed.success) return null;
-    return {
-      sentence: [
-        { text: parsed.data.actor_name, bold: true },
-        { text: " replied to your Comment on ", bold: false },
-        { text: parsed.data.lesson_title, bold: true },
-      ],
-      href: parsed.data.url,
-    };
-  }
-  return null;
-}
-
-export function commentHref(
-  courseSlug: string,
-  lessonId: number,
-  commentId: number
-) {
-  return `/courses/${courseSlug}/lessons/${lessonId}#${commentAnchor(commentId)}`;
+  if (!isNotificationWorkflow(workflowKey)) return null;
+  return workflows[workflowKey].describe(data);
 }
