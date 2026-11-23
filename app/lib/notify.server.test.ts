@@ -1192,6 +1192,22 @@ describe("Refund Issued and Refund Failed", () => {
       ]);
     });
 
+    it("still tells the Student, and no Platform Admin, when there are none", async () => {
+      const { refundId } = await refundFor(student.id);
+      settle(refundId, RefundStatus.Failed);
+      db.update(schema.users)
+        .set({ role: UserRole.Student })
+        .where(eq(schema.users.id, admin.id))
+        .run();
+      const { transport, triggers } = recordingTransport();
+
+      await notifyRefundFailed(db, refundId, transport);
+
+      expect(
+        triggers.map((t) => [t.workflowKey, t.recipients.map((r) => r.id)])
+      ).toEqual([["refund-failed", [`cadence-${student.id}`]]]);
+    });
+
     it("sends nothing for a Refund that isn't Failed", async () => {
       const pending = await refundFor(student.id);
       const issued = await refundFor(otherStudent.id);
