@@ -444,6 +444,22 @@ function getRefundRequestForNotification(db: Db, refundRequestId: number) {
     .get();
 }
 
+type RefundRequestForNotification = NonNullable<
+  ReturnType<typeof getRefundRequestForNotification>
+>;
+
+/**
+ * The trigger data a Notification to the person who raised a Refund Request
+ * carries: which request, and a link to its course.
+ */
+function refundRequestCourseData(request: RefundRequestForNotification) {
+  return {
+    refund_request_id: request.id,
+    course_title: request.courseTitle,
+    url: courseHref(request.courseSlug),
+  };
+}
+
 /** Every Platform Admin except the given user. */
 function getOtherPlatformAdmins(db: Db, userId: number) {
   return db
@@ -493,11 +509,7 @@ export async function notifyRefundRequestRaised(
     await deliver(NotificationWorkflow.RefundRequestReceived, async () => {
       await transport.trigger(NotificationWorkflow.RefundRequestReceived, {
         recipients: [personFor(raiser)],
-        data: {
-          refund_request_id: request.id,
-          course_title: request.courseTitle,
-          url: courseHref(request.courseSlug),
-        },
+        data: refundRequestCourseData(request),
       });
     });
   } catch (error) {
@@ -507,6 +519,31 @@ export async function notifyRefundRequestRaised(
     );
   }
 }
+
+/** Sends the Notification for each decision a Refund Request can have. */
+const SEND_DECISION: Record<
+  RefundRequestStatus.Approved | RefundRequestStatus.Declined,
+  (
+    transport: NotificationTransport,
+    raiser: NotificationPerson,
+    request: RefundRequestForNotification
+  ) => Promise<void>
+> = {
+  [RefundRequestStatus.Approved]: (transport, raiser, request) =>
+    transport.trigger(NotificationWorkflow.RefundRequestApproved, {
+      recipients: [raiser],
+      // A Refund is always the full amount paid.
+      data: {
+        ...refundRequestCourseData(request),
+        amount: formatPrice(request.amountPaid),
+      },
+    }),
+  [RefundRequestStatus.Declined]: (transport, raiser, request) =>
+    transport.trigger(NotificationWorkflow.RefundRequestDeclined, {
+      recipients: [raiser],
+      data: refundRequestCourseData(request),
+    }),
+};
 
 /**
  * Called once a Platform Admin's decision on a Refund Request has committed:
@@ -524,25 +561,9 @@ export async function notifyRefundRequestDecided(
     const request = getRefundRequestForNotification(db, refundRequestId);
     const raiser = request && getUser(db, request.raiserId);
     if (!request || !raiser) return;
+    if (request.status === RefundRequestStatus.Open) return;
 
-    const common = {
-      refund_request_id: request.id,
-      course_title: request.courseTitle,
-      url: courseHref(request.courseSlug),
-    };
-
-    if (request.status === RefundRequestStatus.Approved) {
-      await transport.trigger(NotificationWorkflow.RefundRequestApproved, {
-        recipients: [personFor(raiser)],
-        // A Refund is always the full amount paid.
-        data: { ...common, amount: formatPrice(request.amountPaid) },
-      });
-    } else if (request.status === RefundRequestStatus.Declined) {
-      await transport.trigger(NotificationWorkflow.RefundRequestDeclined, {
-        recipients: [personFor(raiser)],
-        data: common,
-      });
-    }
+    await SEND_DECISION[request.status](transport, personFor(raiser), request);
   } catch (error) {
     console.error(
       `Notification for the decision on Refund Request ${refundRequestId} failed`,
