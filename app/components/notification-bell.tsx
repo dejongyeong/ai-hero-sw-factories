@@ -14,6 +14,8 @@ import {
   Check,
   CheckCheck,
   ChevronRight,
+  CircleCheck,
+  CircleX,
   MessageCircleQuestion,
   MessageSquareReply,
   ReceiptText,
@@ -601,6 +603,14 @@ const ROW_ICONS = {
   [NotificationWorkflow.RefundRequestReceived]: {
     icon: <ReceiptText className="size-4" />,
     tone: "bg-emerald-100 text-emerald-600 dark:bg-emerald-950",
+  },
+  [NotificationWorkflow.RefundRequestApproved]: {
+    icon: <CircleCheck className="size-4" />,
+    tone: "bg-emerald-100 text-emerald-600 dark:bg-emerald-950",
+  },
+  [NotificationWorkflow.RefundRequestDeclined]: {
+    icon: <CircleX className="size-4" />,
+    tone: "bg-rose-100 text-rose-600 dark:bg-rose-950",
   },
 } satisfies Record<NotificationWorkflow, RowIcon>;
 

@@ -28,6 +28,7 @@ import {
   locateRefundRequest,
 } from "~/lib/refunds.server";
 import { sendEmail } from "~/lib/mailer.server";
+import { notifyRefundRequestDecided } from "~/lib/notify.server";
 import {
   REFUND_REQUEST_QUEUE_PATH,
   refundRequestAnchor,
@@ -338,6 +339,11 @@ export async function action({ request }: Route.ActionArgs) {
       console.error("Could not send the refund decision email:", error);
     }
   }
+
+  // Refund Request approved or declined, in the Feed, only once the decision
+  // has committed: a refused decision throws above and sends nothing. Never
+  // throws, so a failed trigger leaves the decision standing.
+  await notifyRefundRequestDecided(db, refundRequest.id);
 
   return {
     success: true,
