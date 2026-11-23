@@ -8,7 +8,7 @@ import {
 } from "react-router";
 import { toast } from "sonner";
 import { z } from "zod";
-import { and, count, desc, eq, isNotNull, sql } from "drizzle-orm";
+import { count, desc, eq, sql } from "drizzle-orm";
 import type { Route } from "./+types/admin.refund-requests";
 import { getCurrentUserId } from "~/lib/session";
 import { parseFormData } from "~/lib/validation";
@@ -17,18 +17,17 @@ import {
   REFUND_WATCH_LIMIT_SECONDS,
   REFUND_WINDOW_DAYS,
   approvalBlocker,
-  buildRefundDecisionEmail,
   declineBlocker,
   refundLimitWarnings,
   type DecisionContext,
 } from "~/lib/refund-decisions";
 import {
+  decideRefundRequest,
   getPurchaseKind,
   getRefundProgress,
   locateRefundRequest,
 } from "~/lib/refunds.server";
 import { sendEmail } from "~/lib/mailer.server";
-import { notifyRefundRequestDecided } from "~/lib/notify.server";
 import {
   REFUND_REQUEST_QUEUE_PATH,
   refundRequestAnchor,
@@ -37,10 +36,8 @@ import { db } from "~/db";
 import {
   coupons,
   courses,
-  enrollments,
   purchases,
   refundRequests,
-  refunds,
   users,
   RefundRequestStatus,
   UserRole,
@@ -103,22 +100,6 @@ function getRefundRequests(status: RefundRequestStatus) {
         : desc(refundRequests.decidedAt)
     )
     .all();
-}
-
-function getRefundRequestForDecision(refundRequestId: number) {
-  return db
-    .select({
-      id: refundRequests.id,
-      status: refundRequests.status,
-      purchaseId: purchases.id,
-      amountPaid: purchases.amountPaid,
-      buyerUserId: purchases.userId,
-      courseId: purchases.courseId,
-    })
-    .from(refundRequests)
-    .innerJoin(purchases, eq(refundRequests.purchaseId, purchases.id))
-    .where(eq(refundRequests.id, refundRequestId))
-    .get();
 }
 
 /** Every Seat on a Team Licence, and how many are Claimed. */
@@ -219,131 +200,29 @@ export async function action({ request }: Route.ActionArgs) {
   }
   const { intent, refundRequestId } = parsed.data;
 
-  const refundRequest = getRefundRequestForDecision(refundRequestId);
-  if (!refundRequest) {
-    throw data("Refund request not found.", { status: 404 });
-  }
-
-  const seats = getSeatCounts(refundRequest.purchaseId);
-  const purchaseKind = getPurchaseKind(db, refundRequest.purchaseId);
-  const context: DecisionContext = {
-    status: refundRequest.status,
-    deciderUserId: platformAdmin.id,
-    buyerUserId: refundRequest.buyerUserId,
-    purchaseKind,
-    claimedSeatCount: seats.claimed,
-  };
-
-  const blocker =
-    intent === "approve" ? approvalBlocker(context) : declineBlocker(context);
-  if (blocker) {
-    throw data(blocker, { status: 409 });
-  }
-
   const decision =
     intent === "approve"
       ? RefundRequestStatus.Approved
       : RefundRequestStatus.Declined;
 
-  db.transaction((tx) => {
-    // Only an Open request can be decided. Checking the status again here
-    // stops two Platform Admins deciding the same request at once.
-    const decided = tx
-      .update(refundRequests)
-      .set({
-        status: decision,
-        decidedAt: new Date().toISOString(),
-        decidedByUserId: platformAdmin.id,
-      })
-      .where(
-        and(
-          eq(refundRequests.id, refundRequest.id),
-          eq(refundRequests.status, RefundRequestStatus.Open)
-        )
-      )
-      .returning({ id: refundRequests.id })
-      .get();
+  const decided = await decideRefundRequest(
+    db,
+    refundRequestId,
+    platformAdmin.id,
+    decision
+  );
+  if (!decided.ok) {
+    throw data(decided.error, { status: decided.status });
+  }
 
-    if (!decided) {
-      throw data("This refund request has already been decided.", {
-        status: 409,
-      });
-    }
-
-    if (decision === RefundRequestStatus.Declined) return;
-
-    // A Seat could have been Claimed since the check above.
-    if (purchaseKind === "team") {
-      const claimedNow = tx
-        .select({ id: coupons.id })
-        .from(coupons)
-        .where(
-          and(
-            eq(coupons.purchaseId, refundRequest.purchaseId),
-            isNotNull(coupons.redeemedAt)
-          )
-        )
-        .get();
-      if (claimedNow) {
-        throw data(
-          "A Seat has been claimed on this Team Licence, so it cannot be refunded.",
-          { status: 409 }
-        );
-      }
-    }
-
-    // A Refund is always the full amount paid.
-    tx.insert(refunds)
-      .values({
-        refundRequestId: refundRequest.id,
-        amount: refundRequest.amountPaid,
-      })
-      .run();
-
-    // The Enrollment ends now; the Student's Progress is kept.
-    // See docs/adr/0001-enrollment-ends-at-approval.md. A Team Admin is not
-    // enrolled by a Team Licence, so there is nothing to end for one — its
-    // Unclaimed Seats are refused at Claim time instead.
-    if (purchaseKind === "individual") {
-      tx.delete(enrollments)
-        .where(
-          and(
-            eq(enrollments.userId, refundRequest.buyerUserId),
-            eq(enrollments.courseId, refundRequest.courseId)
-          )
-        )
-        .run();
-    }
-  });
-
-  const recipient = getUserById(refundRequest.buyerUserId);
-  const course = db
-    .select({ title: courses.title })
-    .from(courses)
-    .where(eq(courses.id, refundRequest.courseId))
-    .get();
-
-  if (recipient && course) {
-    const email = buildRefundDecisionEmail({
-      decision,
-      recipientName: recipient.name,
-      recipientEmail: recipient.email,
-      courseTitle: course.title,
-      amount: refundRequest.amountPaid,
-      purchaseKind,
-    });
-    // The decision stands whether or not the email goes out.
+  // The decision stands whether or not the email goes out.
+  if (decided.email) {
     try {
-      await sendEmail(email);
+      await sendEmail(decided.email);
     } catch (error) {
       console.error("Could not send the refund decision email:", error);
     }
   }
-
-  // Refund Request approved or declined, in the Feed, only once the decision
-  // has committed: a refused decision throws above and sends nothing. Never
-  // throws, so a failed trigger leaves the decision standing.
-  await notifyRefundRequestDecided(db, refundRequest.id);
 
   return {
     success: true,

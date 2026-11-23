@@ -13,7 +13,7 @@ import {
 import type { Db } from "~/db";
 import { createTestDb } from "~/test/setup";
 import { postComment } from "./comments.server";
-import { raiseRefundRequest } from "./refunds.server";
+import { decideRefundRequest, raiseRefundRequest } from "./refunds.server";
 import type { NotificationWorkflow } from "./notifications";
 import {
   archiveCommentNotifications,
@@ -793,6 +793,149 @@ describe("notifyRefundRequestDecided", () => {
     await expect(
       notifyRefundRequestDecided(db, refundRequestId, failing)
     ).resolves.toBeUndefined();
+  });
+});
+
+describe("decideRefundRequest: Refund Request approved and declined", () => {
+  let admin: typeof schema.users.$inferSelect;
+
+  beforeEach(() => {
+    admin = db
+      .insert(schema.users)
+      .values({ name: "Ada", email: "ada@example.com", role: UserRole.Admin })
+      .returning()
+      .get();
+  });
+
+  function raise(buyerId: number) {
+    const purchase = db
+      .insert(schema.purchases)
+      .values({ userId: buyerId, courseId, amountPaid: 7900 })
+      .returning()
+      .get();
+    const raised = raiseRefundRequest(
+      db,
+      purchase.id,
+      buyerId,
+      "It wasn't what I expected.",
+      new Date()
+    );
+    if (!raised.ok) throw new Error(raised.error);
+    return { refundRequestId: raised.refundRequestId, purchaseId: purchase.id };
+  }
+
+  it("sends Refund Request approved once the decision commits", async () => {
+    const { refundRequestId } = raise(student.id);
+    const { transport, triggers } = recordingTransport();
+
+    const decided = await decideRefundRequest(
+      db,
+      refundRequestId,
+      admin.id,
+      RefundRequestStatus.Approved,
+      transport
+    );
+
+    expect(decided.ok).toBe(true);
+    expect(triggers.map((t) => t.workflowKey)).toEqual([
+      "refund-request-approved",
+    ]);
+  });
+
+  it("sends nothing when the Refund Request is already decided", async () => {
+    const { refundRequestId } = raise(student.id);
+    await decideRefundRequest(
+      db,
+      refundRequestId,
+      admin.id,
+      RefundRequestStatus.Declined,
+      recordingTransport().transport
+    );
+    const { transport, triggers } = recordingTransport();
+
+    const decided = await decideRefundRequest(
+      db,
+      refundRequestId,
+      admin.id,
+      RefundRequestStatus.Approved,
+      transport
+    );
+
+    expect(decided).toEqual({
+      ok: false,
+      status: 409,
+      error: "This refund request has already been decided.",
+    });
+    expect(triggers).toEqual([]);
+  });
+
+  it("sends nothing when a Platform Admin decides their own Refund Request", async () => {
+    const { refundRequestId } = raise(admin.id);
+    const { transport, triggers } = recordingTransport();
+
+    const decided = await decideRefundRequest(
+      db,
+      refundRequestId,
+      admin.id,
+      RefundRequestStatus.Declined,
+      transport
+    );
+
+    expect(decided).toEqual({
+      ok: false,
+      status: 409,
+      error:
+        "You cannot decide your own refund request. Another Platform Admin must decide it.",
+    });
+    expect(triggers).toEqual([]);
+  });
+
+  it("sends nothing when approving a Team Licence with a Claimed Seat", async () => {
+    const team = db.insert(schema.teams).values({}).returning().get();
+    const purchase = db
+      .insert(schema.purchases)
+      .values({ userId: student.id, courseId, amountPaid: 7900 * 2 })
+      .returning()
+      .get();
+    db.insert(schema.coupons)
+      .values([
+        { teamId: team.id, courseId, code: "SEAT-1", purchaseId: purchase.id },
+        { teamId: team.id, courseId, code: "SEAT-2", purchaseId: purchase.id },
+      ])
+      .run();
+    // Raised while every Seat was Unclaimed; one is Claimed while it is Open.
+    const raised = raiseRefundRequest(
+      db,
+      purchase.id,
+      student.id,
+      "We no longer need it.",
+      new Date()
+    );
+    if (!raised.ok) throw new Error(raised.error);
+    db.update(schema.coupons)
+      .set({
+        redeemedByUserId: otherStudent.id,
+        redeemedAt: new Date().toISOString(),
+      })
+      .where(eq(schema.coupons.code, "SEAT-1"))
+      .run();
+    const { transport, triggers } = recordingTransport();
+
+    const decided = await decideRefundRequest(
+      db,
+      raised.refundRequestId,
+      admin.id,
+      RefundRequestStatus.Approved,
+      transport
+    );
+
+    expect(decided).toEqual({
+      ok: false,
+      status: 409,
+      error:
+        "1 Seat has been claimed on this Team Licence, so it cannot be refunded.",
+    });
+    expect(triggers).toEqual([]);
   });
 });
 
