@@ -259,11 +259,8 @@ describe("describeNotification", () => {
 
   it("describes a Team Licence with its seat count", () => {
     expect(
-      describeNotification(
-        "new-purchase",
-        { ...newPurchase, seat_count: 5 },
-        1
-      )?.sentence
+      describeNotification("new-purchase", { ...newPurchase, seat_count: 5 }, 1)
+        ?.sentence
     ).toEqual([
       { text: "Liam", bold: true },
       { text: " bought 5 seats on ", bold: false },
