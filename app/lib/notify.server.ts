@@ -424,7 +424,6 @@ function getRefundRequestWithPurchase(db: Db, refundRequestId: number) {
   return db
     .select({
       id: refundRequests.id,
-      status: refundRequests.status,
       amountPaid: purchases.amountPaid,
       buyerId: purchases.userId,
       courseTitle: courses.title,
@@ -472,7 +471,7 @@ export async function notifyRefundRequestRaised(
           actor_name: raiser.name,
           course_title: request.courseTitle,
           amount: formatPrice(request.amountPaid),
-          url: refundRequestHref(request.id, request.status),
+          url: refundRequestHref(request.id),
         },
       });
     });

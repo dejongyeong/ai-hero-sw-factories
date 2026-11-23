@@ -53,7 +53,7 @@ describe("describeNotification", () => {
         actor_name: "Liam",
         course_title: "Introduction to TypeScript",
         amount: "$79.00",
-        url: "/admin/refund-requests?status=open#refund-request-4",
+        url: "/admin/refund-requests?request=4",
       })
     ).toEqual({
       sentence: [
@@ -62,7 +62,7 @@ describe("describeNotification", () => {
         { text: "Introduction to TypeScript", bold: true },
         { text: " ($79.00)", bold: false },
       ],
-      href: "/admin/refund-requests?status=open#refund-request-4",
+      href: "/admin/refund-requests?request=4",
       category: "Refunds",
     });
   });

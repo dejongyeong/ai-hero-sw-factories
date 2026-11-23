@@ -558,7 +558,7 @@ describe("notifyRefundRequestRaised", () => {
     expect(sent(triggers, "refund-request-raised")).toEqual([]);
   });
 
-  it("carries the Student, course, amount and a link to the card on the Open queue", async () => {
+  it("carries the Student, course, amount and a stable link to the Refund Request", async () => {
     addAdmin("Ada");
     const id = raise(student.id, 7900);
     const { transport, triggers } = recordingTransport();
@@ -576,7 +576,7 @@ describe("notifyRefundRequestRaised", () => {
       actor_name: "Liam",
       course_title: "Introduction to TypeScript",
       amount: "$79.00",
-      url: `/admin/refund-requests?status=open#refund-request-${id}`,
+      url: `/admin/refund-requests?request=${id}`,
     });
   });
 

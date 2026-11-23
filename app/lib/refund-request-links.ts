@@ -4,15 +4,25 @@
 
 import type { RefundRequestStatus } from "~/db/schema";
 
+export const REFUND_REQUEST_QUEUE_PATH = "/admin/refund-requests";
+
 /** The DOM id a Refund Request's card is rendered with. */
 export function refundRequestAnchor(refundRequestId: number) {
   return `refund-request-${refundRequestId}`;
 }
 
-/** The path to a Refund Request on the admin queue, filtered to its status. */
-export function refundRequestHref(
+/**
+ * A link to a Refund Request that stays good once it is decided. The admin
+ * queue redirects it to wherever the card is now (see refundRequestQueueHref).
+ */
+export function refundRequestHref(refundRequestId: number) {
+  return `${REFUND_REQUEST_QUEUE_PATH}?request=${refundRequestId}`;
+}
+
+/** The path to a Refund Request's card on the queue, filtered to its status. */
+export function refundRequestQueueHref(
   refundRequestId: number,
   status: RefundRequestStatus
 ) {
-  return `/admin/refund-requests?status=${status}#${refundRequestAnchor(refundRequestId)}`;
+  return `${REFUND_REQUEST_QUEUE_PATH}?status=${status}#${refundRequestAnchor(refundRequestId)}`;
 }

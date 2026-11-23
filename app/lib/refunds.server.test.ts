@@ -13,6 +13,7 @@ import {
 import {
   findPurchaseToRefund,
   getRefundOffer,
+  locateRefundRequest,
   raiseRefundRequest,
 } from "./refunds.server";
 import type { Db } from "~/db";
@@ -202,3 +203,43 @@ describe("findPurchaseToRefund", () => {
     });
   });
 });
+
+describe("locateRefundRequest", () => {
+  function raise() {
+    const result = raiseRefundRequest(
+      db,
+      buy(3).id,
+      student.id,
+      "Not what I expected.",
+      NOW
+    );
+    if (!result.ok) throw new Error(result.error);
+    return result.refundRequestId;
+  }
+
+  it("finds an Open Refund Request's card on the Open queue", () => {
+    const id = raise();
+    expect(locateRefundRequest(db, id)).toBe(
+      `/admin/refund-requests?status=open#refund-request-${id}`
+    );
+  });
+
+  it("finds a decided Refund Request's card on the queue for its decision", () => {
+    const id = raise();
+    db.update(schema.refundRequests)
+      .set({
+        status: RefundRequestStatus.Declined,
+        decidedAt: NOW.toISOString(),
+      })
+      .where(eq(schema.refundRequests.id, id))
+      .run();
+
+    expect(locateRefundRequest(db, id)).toBe(
+      `/admin/refund-requests?status=declined#refund-request-${id}`
+    );
+  });
+
+  it("finds nothing for a Refund Request that doesn't exist", () => {
+    expect(locateRefundRequest(db, 999)).toBeNull();
+  });
+});
