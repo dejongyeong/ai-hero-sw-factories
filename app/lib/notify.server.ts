@@ -635,7 +635,7 @@ function refundCourseData(refund: RefundForNotification) {
 }
 
 /**
- * Called once a Refund has moved to Issued: Refund Issued tells the Student
+ * Called once a Refund has moved to Issued: Refund issued tells the Student
  * their money has been sent. A Refund that isn't Issued sends nothing. Always
  * sent: its Knock workflow can't be switched off. Nothing in Cadence moves a
  * Refund to Issued yet, so nothing calls this yet.
@@ -663,7 +663,7 @@ export async function notifyRefundIssued(
 }
 
 /**
- * Called once a Refund has moved to Failed: Refund Failed tells the Student
+ * Called once a Refund has moved to Failed: Refund failed tells the Student
  * Cadence is on it, and tells every Platform Admin so they can fix the
  * payment, linking to its Refund Request on the admin queue. Each copy is sent
  * on its own, so one failing doesn't stop the other. A Refund that isn't

@@ -131,7 +131,7 @@ describe("describeNotification", () => {
     ).toBeNull();
   });
 
-  it("describes Refund Issued under Refunds, linking to the course", () => {
+  it("describes Refund issued under Refunds, linking to the course", () => {
     expect(
       describeNotification("refund-issued", {
         refund_id: 9,
@@ -150,7 +150,7 @@ describe("describeNotification", () => {
     });
   });
 
-  it("describes the Student's Refund Failed under Refunds, linking to the course", () => {
+  it("describes the Student's Refund failed under Refunds, linking to the course", () => {
     expect(
       describeNotification("refund-failed", {
         refund_id: 9,
@@ -168,7 +168,7 @@ describe("describeNotification", () => {
     });
   });
 
-  it("describes a Platform Admin's Refund Failed under Refunds, linking to the queue", () => {
+  it("describes a Platform Admin's Refund failed under Refunds, linking to the queue", () => {
     expect(
       describeNotification("refund-failed-admin", {
         refund_id: 9,
@@ -190,7 +190,7 @@ describe("describeNotification", () => {
     });
   });
 
-  it("returns null for a Refund Issued without its amount", () => {
+  it("returns null for a Refund issued without its amount", () => {
     expect(
       describeNotification("refund-issued", {
         refund_id: 9,

@@ -171,10 +171,10 @@ _Avoid_: Refund approved alert, Refund confirmation
 The Notification telling the person who raised a Refund Request, the Team Admin for a Team Licence, that a Platform Admin declined it, such as "Your refund request for Introduction to TypeScript was declined; you keep access". It gives no reason, because none is recorded. It is sent once the decision has been saved, links to the course and is always sent.
 _Avoid_: Refund rejected, Refund denial
 
-**Refund Issued**:
+**Refund issued**:
 The Notification telling the person a Refund goes back to, the Team Admin for a Team Licence, that the money has been sent, such as "Your $79.00 refund for Introduction to TypeScript has been sent". It is sent once the Refund is an Issued Refund, links to the course and is always sent.
 _Avoid_: Refund complete, Refund paid
 
-**Refund Failed**:
+**Refund failed**:
 The Notification sent once a Refund is a Failed Refund. The person it goes back to, the Team Admin for a Team Licence, reads "We couldn't send your refund for Introduction to TypeScript; we're on it", linking to the course. Every Platform Admin reads "Refund for Liam on Introduction to TypeScript failed", linking to its Refund Request on the admin queue, so they can fix the payment. It is always sent.
 _Avoid_: Refund error, Payment failure
