@@ -84,25 +84,34 @@ const workflows = {
     })
   ),
   [NotificationWorkflow.NewQuestion]: workflow(
-    // `lesson_id` is the batch key.
-    commentNotificationData.extend({ lesson_id: z.number().int() }),
-    (data, activityCount) => ({
-      sentence:
-        activityCount > 1
-          ? [
-              { text: `${activityCount} new questions`, bold: true },
-              { text: " on ", bold: false },
-              { text: data.lesson_title, bold: true },
-            ]
-          : [
-              { text: data.actor_name, bold: true },
-              { text: " asked a question on ", bold: false },
-              { text: data.lesson_title, bold: true },
-            ],
-      // A batch links to its latest Question.
-      href: data.url,
-      category: "Discussions",
-    })
+    // `lesson_id` is the batch key. `comment_ids` is set only on a New
+    // question re-sent after a Question in its batch was deleted: every live
+    // Question it stands for, in place of the batch's activities.
+    commentNotificationData.extend({
+      lesson_id: z.number().int(),
+      comment_ids: z.array(z.number().int()).min(1).optional(),
+    }),
+    (data, activityCount) => {
+      // A re-sent New question is one activity standing for `comment_ids`.
+      const count = data.comment_ids?.length ?? activityCount;
+      return {
+        sentence:
+          count > 1
+            ? [
+                { text: `${count} new questions`, bold: true },
+                { text: " on ", bold: false },
+                { text: data.lesson_title, bold: true },
+              ]
+            : [
+                { text: data.actor_name, bold: true },
+                { text: " asked a question on ", bold: false },
+                { text: data.lesson_title, bold: true },
+              ],
+        // A batch links to its latest Question.
+        href: data.url,
+        category: "Discussions",
+      };
+    }
   ),
 } satisfies Record<NotificationWorkflow, unknown>;
 

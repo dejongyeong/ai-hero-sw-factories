@@ -71,4 +71,32 @@ describe("describeNotification", () => {
       { text: "Generics", bold: true },
     ]);
   });
+
+  it("counts a re-sent New question by the live Questions it carries", () => {
+    expect(
+      describeNotification(
+        "new-question",
+        { ...newQuestion, comment_ids: [4, 9] },
+        1
+      )?.sentence
+    ).toEqual([
+      { text: "2 new questions", bold: true },
+      { text: " on ", bold: false },
+      { text: "Generics", bold: true },
+    ]);
+  });
+
+  it("describes a re-sent New question for one live Question by its asker", () => {
+    expect(
+      describeNotification(
+        "new-question",
+        { ...newQuestion, comment_ids: [9] },
+        1
+      )?.sentence
+    ).toEqual([
+      { text: "Liam", bold: true },
+      { text: " asked a question on ", bold: false },
+      { text: "Generics", bold: true },
+    ]);
+  });
 });
