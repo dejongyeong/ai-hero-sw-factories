@@ -13,6 +13,11 @@ export const NotificationWorkflow = {
   RefundRequestReceived: "refund-request-received",
   RefundRequestApproved: "refund-request-approved",
   RefundRequestDeclined: "refund-request-declined",
+  RefundIssued: "refund-issued",
+  // Refund failed is one Notification sent as two workflows, one per
+  // recipient, so neither Knock template needs a branch on who reads it.
+  RefundFailed: "refund-failed",
+  RefundFailedAdmin: "refund-failed-admin",
 } as const;
 
 export type NotificationWorkflow =
@@ -80,6 +85,16 @@ const commentNotificationData = z.object({
  */
 const refundRequestNotificationData = z.object({
   refund_request_id: z.number().int(),
+  course_title: z.string(),
+  url: z.string().startsWith("/"),
+});
+
+/**
+ * What every Notification about a Refund carries: the Refund, its course, and
+ * where the Notification links to.
+ */
+const refundNotificationData = z.object({
+  refund_id: z.number().int(),
   course_title: z.string(),
   url: z.string().startsWith("/"),
 });
@@ -171,6 +186,50 @@ const workflows = {
         { text: "Your refund request for ", bold: false },
         { text: data.course_title, bold: true },
         { text: " was declined; you keep access", bold: false },
+      ],
+      href: data.url,
+      category: "Refunds",
+    })
+  ),
+  [NotificationWorkflow.RefundIssued]: workflow(
+    refundNotificationData.extend({
+      // Already formatted, such as "$79.00", so a Knock template can show it.
+      amount: z.string(),
+    }),
+    (data) => ({
+      sentence: [
+        { text: `Your ${data.amount} refund for `, bold: false },
+        { text: data.course_title, bold: true },
+        { text: " has been sent", bold: false },
+      ],
+      href: data.url,
+      category: "Refunds",
+    })
+  ),
+  [NotificationWorkflow.RefundFailed]: workflow(
+    refundNotificationData,
+    (data) => ({
+      sentence: [
+        { text: "We couldn't send your refund for ", bold: false },
+        { text: data.course_title, bold: true },
+        { text: "; we're on it", bold: false },
+      ],
+      href: data.url,
+      category: "Refunds",
+    })
+  ),
+  [NotificationWorkflow.RefundFailedAdmin]: workflow(
+    refundNotificationData.extend({
+      refund_request_id: z.number().int(),
+      student_name: z.string(),
+    }),
+    (data) => ({
+      sentence: [
+        { text: "Refund for ", bold: false },
+        { text: data.student_name, bold: true },
+        { text: " on ", bold: false },
+        { text: data.course_title, bold: true },
+        { text: " failed", bold: false },
       ],
       href: data.url,
       category: "Refunds",
