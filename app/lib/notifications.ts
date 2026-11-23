@@ -11,6 +11,8 @@ export const NotificationWorkflow = {
   NewQuestion: "new-question",
   RefundRequestRaised: "refund-request-raised",
   RefundRequestReceived: "refund-request-received",
+  RefundRequestApproved: "refund-request-approved",
+  RefundRequestDeclined: "refund-request-declined",
 } as const;
 
 export type NotificationWorkflow =
@@ -142,6 +144,33 @@ const workflows = {
       sentence: [
         { text: "We've got your refund request for ", bold: false },
         { text: data.course_title, bold: true },
+      ],
+      href: data.url,
+      category: "Refunds",
+    })
+  ),
+  [NotificationWorkflow.RefundRequestApproved]: workflow(
+    refundRequestNotificationData.extend({
+      // Already formatted, such as "$79.00", so a Knock template can show it.
+      amount: z.string(),
+    }),
+    (data) => ({
+      sentence: [
+        { text: "Your refund for ", bold: false },
+        { text: data.course_title, bold: true },
+        { text: ` was approved — ${data.amount}`, bold: false },
+      ],
+      href: data.url,
+      category: "Refunds",
+    })
+  ),
+  [NotificationWorkflow.RefundRequestDeclined]: workflow(
+    refundRequestNotificationData,
+    (data) => ({
+      sentence: [
+        { text: "Your refund request for ", bold: false },
+        { text: data.course_title, bold: true },
+        { text: " was declined; you keep access", bold: false },
       ],
       href: data.url,
       category: "Refunds",

@@ -84,6 +84,53 @@ describe("describeNotification", () => {
     });
   });
 
+  it("describes Refund Request approved under Refunds, linking to the course", () => {
+    expect(
+      describeNotification("refund-request-approved", {
+        refund_request_id: 4,
+        course_title: "Introduction to TypeScript",
+        amount: "$79.00",
+        url: "/courses/intro-ts",
+      })
+    ).toEqual({
+      sentence: [
+        { text: "Your refund for ", bold: false },
+        { text: "Introduction to TypeScript", bold: true },
+        { text: " was approved — $79.00", bold: false },
+      ],
+      href: "/courses/intro-ts",
+      category: "Refunds",
+    });
+  });
+
+  it("describes Refund Request declined under Refunds, linking to the course", () => {
+    expect(
+      describeNotification("refund-request-declined", {
+        refund_request_id: 4,
+        course_title: "Introduction to TypeScript",
+        url: "/courses/intro-ts",
+      })
+    ).toEqual({
+      sentence: [
+        { text: "Your refund request for ", bold: false },
+        { text: "Introduction to TypeScript", bold: true },
+        { text: " was declined; you keep access", bold: false },
+      ],
+      href: "/courses/intro-ts",
+      category: "Refunds",
+    });
+  });
+
+  it("returns null for a Refund Request approved without its amount", () => {
+    expect(
+      describeNotification("refund-request-approved", {
+        refund_request_id: 4,
+        course_title: "Introduction to TypeScript",
+        url: "/courses/intro-ts",
+      })
+    ).toBeNull();
+  });
+
   it("returns null for a Refund Request raised it can't read", () => {
     expect(
       describeNotification("refund-request-raised", { actor_name: "Liam" })

@@ -2,6 +2,7 @@ import { Knock } from "@knocklabs/node";
 import { and, eq, ne } from "drizzle-orm";
 import type { Db } from "~/db";
 import {
+  RefundRequestStatus,
   UserRole,
   courses,
   lessons,
@@ -430,6 +431,7 @@ function getRefundRequestForNotification(db: Db, refundRequestId: number) {
   return db
     .select({
       id: refundRequests.id,
+      status: refundRequests.status,
       amountPaid: purchases.amountPaid,
       raiserId: purchases.userId,
       courseTitle: courses.title,
@@ -440,6 +442,22 @@ function getRefundRequestForNotification(db: Db, refundRequestId: number) {
     .innerJoin(courses, eq(purchases.courseId, courses.id))
     .where(eq(refundRequests.id, refundRequestId))
     .get();
+}
+
+type RefundRequestForNotification = NonNullable<
+  ReturnType<typeof getRefundRequestForNotification>
+>;
+
+/**
+ * The trigger data a Notification to the person who raised a Refund Request
+ * carries: which request, and a link to its course.
+ */
+function refundRequestCourseData(request: RefundRequestForNotification) {
+  return {
+    refund_request_id: request.id,
+    course_title: request.courseTitle,
+    url: courseHref(request.courseSlug),
+  };
 }
 
 /** Every Platform Admin except the given user. */
@@ -491,16 +509,64 @@ export async function notifyRefundRequestRaised(
     await deliver(NotificationWorkflow.RefundRequestReceived, async () => {
       await transport.trigger(NotificationWorkflow.RefundRequestReceived, {
         recipients: [personFor(raiser)],
-        data: {
-          refund_request_id: request.id,
-          course_title: request.courseTitle,
-          url: courseHref(request.courseSlug),
-        },
+        data: refundRequestCourseData(request),
       });
     });
   } catch (error) {
     console.error(
       `Notifications for Refund Request ${refundRequestId} failed`,
+      error
+    );
+  }
+}
+
+/** Sends the Notification for each decision a Refund Request can have. */
+const SEND_DECISION: Record<
+  RefundRequestStatus.Approved | RefundRequestStatus.Declined,
+  (
+    transport: NotificationTransport,
+    raiser: NotificationPerson,
+    request: RefundRequestForNotification
+  ) => Promise<void>
+> = {
+  [RefundRequestStatus.Approved]: (transport, raiser, request) =>
+    transport.trigger(NotificationWorkflow.RefundRequestApproved, {
+      recipients: [raiser],
+      // A Refund is always the full amount paid.
+      data: {
+        ...refundRequestCourseData(request),
+        amount: formatPrice(request.amountPaid),
+      },
+    }),
+  [RefundRequestStatus.Declined]: (transport, raiser, request) =>
+    transport.trigger(NotificationWorkflow.RefundRequestDeclined, {
+      recipients: [raiser],
+      data: refundRequestCourseData(request),
+    }),
+};
+
+/**
+ * Called once a Platform Admin's decision on a Refund Request has committed:
+ * Refund Request approved or declined tells the person who raised it, which
+ * for a Team Licence is its Team Admin. A Refund Request still Open sends
+ * nothing. Always sent: neither Knock workflow can be switched off. The
+ * decision email still goes out through the mailer, not here.
+ */
+export async function notifyRefundRequestDecided(
+  db: Db,
+  refundRequestId: number,
+  transport: NotificationTransport = defaultTransport()
+): Promise<void> {
+  try {
+    const request = getRefundRequestForNotification(db, refundRequestId);
+    const raiser = request && getUser(db, request.raiserId);
+    if (!request || !raiser) return;
+    if (request.status === RefundRequestStatus.Open) return;
+
+    await SEND_DECISION[request.status](transport, personFor(raiser), request);
+  } catch (error) {
+    console.error(
+      `Notification for the decision on Refund Request ${refundRequestId} failed`,
       error
     );
   }

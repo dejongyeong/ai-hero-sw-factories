@@ -162,3 +162,11 @@ _Avoid_: Refund alert, New refund
 **Refund Request received**:
 The Notification telling the person who raised a Refund Request that Cadence has it, such as "We've got your refund request for Introduction to TypeScript". It links to the course and is always sent.
 _Avoid_: Refund confirmation, Refund receipt
+
+**Refund Request approved**:
+The Notification telling the person who raised a Refund Request, the Team Admin for a Team Licence, that a Platform Admin approved it, such as "Your refund for Introduction to TypeScript was approved — $79.00". It is sent once the decision has been saved, links to the course and is always sent.
+_Avoid_: Refund approved alert, Refund confirmation
+
+**Refund Request declined**:
+The Notification telling the person who raised a Refund Request, the Team Admin for a Team Licence, that a Platform Admin declined it, such as "Your refund request for Introduction to TypeScript was declined; you keep access". It gives no reason, because none is recorded. It is sent once the decision has been saved, links to the course and is always sent.
+_Avoid_: Refund rejected, Refund denial
