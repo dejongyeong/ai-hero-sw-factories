@@ -84,16 +84,9 @@ const workflows = {
     })
   ),
   [NotificationWorkflow.NewQuestion]: workflow(
-    // `lesson_id` is the batch key. `comment_ids` is set only on a New
-    // question re-sent after a Question in its batch was deleted: every live
-    // Question it stands for, in place of the batch's activities.
-    commentNotificationData.extend({
-      lesson_id: z.number().int(),
-      comment_ids: z.array(z.number().int()).min(1).optional(),
-    }),
-    (data, activityCount) => {
-      // A re-sent New question is one activity standing for `comment_ids`.
-      const count = data.comment_ids?.length ?? activityCount;
+    // `lesson_id` is the batch key.
+    commentNotificationData.extend({ lesson_id: z.number().int() }),
+    (data, count) => {
       return {
         sentence:
           count > 1
@@ -107,7 +100,8 @@ const workflows = {
                 { text: " asked a question on ", bold: false },
                 { text: data.lesson_title, bold: true },
               ],
-        // A batch links to its latest Question.
+        // A batch links to its latest Question: Knock's merged data, or the
+        // latest live Question's when the Feed passes it (liveNewQuestion).
         href: data.url,
         category: "Discussions",
       };
@@ -139,4 +133,77 @@ export function describeNotification(
 ): DescribedNotification | null {
   if (!isNotificationWorkflow(workflowKey)) return null;
   return workflows[workflowKey].describe(data, activityCount);
+}
+
+// ─── New question: what is still live ───
+// A delivered New question can hold Questions deleted since: a delete after
+// the batch window closed can't be cancelled out of it, and the message is
+// only archived once every Question in it is deleted. So the Feed counts it at
+// render time, against the Comment ids the app says are still live. The Feed
+// must be loaded in Knock's "rich" mode, or items carry neither
+// `total_activities` nor `activities`.
+
+/** A Feed item, as far as counting a New question needs it. */
+export type NewQuestionItem = {
+  data: unknown;
+  total_activities?: number;
+  activities?: { data: unknown }[];
+};
+
+type ListedQuestion = { comment_id: number; data: unknown };
+
+function commentIdOf(data: unknown): number | null {
+  if (typeof data !== "object" || data === null) return null;
+  const id = (data as { comment_id?: unknown }).comment_id;
+  return typeof id === "number" && Number.isInteger(id) ? id : null;
+}
+
+/** Each Question the item lists, one per activity, or its own data if none. */
+function questionsIn(item: NewQuestionItem): ListedQuestion[] {
+  const sources = item.activities?.length
+    ? item.activities.map((activity) => activity.data)
+    : [item.data];
+  return sources.flatMap((data) => {
+    const comment_id = commentIdOf(data);
+    return comment_id === null ? [] : [{ comment_id, data }];
+  });
+}
+
+/** The Question ids a New question Feed item lists, to check for liveness. */
+export function newQuestionCommentIds(item: NewQuestionItem): number[] {
+  return [...new Set(questionsIn(item).map((q) => q.comment_id))];
+}
+
+/**
+ * What a New question Feed item shows once deleted Questions are left out:
+ * how many are live, and the data to describe it by, which is the latest live
+ * Question's, so a lone survivor reads as asked by its asker and the row links
+ * to it. Null when none is live, so the row is hidden. `live` null means the
+ * check couldn't be made: Knock's count and data are shown as they are.
+ *
+ * Knock lists at most 10 activities on a batched item by default
+ * (https://docs.knock.app/designing-workflows/batch-function: `activities` is
+ * "a list of up to ten of the activity objects included within the batch"),
+ * while `total_activities` counts every run
+ * (https://docs.knock.app/in-app-ui/api-overview). So the count is the total
+ * minus the deleted Questions it can see; a deleted one beyond those listed is
+ * still counted.
+ */
+export function liveNewQuestion(
+  item: NewQuestionItem,
+  live: ReadonlySet<number> | null
+): { count: number; data: unknown } | null {
+  const total = item.total_activities ?? 1;
+  if (live === null) return { count: total, data: item.data };
+  const questions = questionsIn(item);
+  const deleted = questions.filter((q) => !live.has(q.comment_id)).length;
+  const count = total - deleted;
+  if (count <= 0) return null;
+  // Comment ids grow with time, so the highest live one is the latest.
+  const latest = questions
+    .filter((q) => live.has(q.comment_id))
+    .sort((a, b) => a.comment_id - b.comment_id)
+    .at(-1);
+  // When every live Question is beyond those listed, keep Knock's data.
+  return { count, data: latest?.data ?? item.data };
 }

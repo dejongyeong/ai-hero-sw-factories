@@ -53,16 +53,13 @@ export type NotificationCancel = {
 };
 
 /**
- * A New question message that was archived because it held a deleted Comment:
- * who it was for, and every Comment it was about, the deleted one included.
- */
-export type ArchivedNewQuestion = { recipient: string; comment_ids: number[] };
-
-/**
  * A deleted Comment whose Notifications are to be archived. `lesson_id` finds
  * the batched New question messages it may be part of.
  */
 export type DeletedComment = { comment_id: number; lesson_id: number };
+
+/** Whether a Comment is gone: soft-deleted, or no longer there at all. */
+export type IsCommentDeleted = (commentId: number) => boolean;
 
 export interface NotificationTransport {
   trigger<W extends NotificationWorkflow>(
@@ -75,18 +72,15 @@ export interface NotificationTransport {
    */
   cancel(request: NotificationCancel): Promise<void>;
   /**
-   * Archives every message, for every recipient, about `comment`: those
-   * triggered with its `comment_id`, including a batch it was folded into.
-   * Returns the New question messages archived, so their other Questions can
-   * be re-sent.
+   * Archives, for every recipient, each delivered message `comment` leaves
+   * with nothing live to show: a Comment reply about it, and a New question
+   * holding it once every Question in it is deleted (`isDeleted`). A New
+   * question with a Question still live stays; the Feed counts it without the
+   * deleted ones (see liveNewQuestion).
    */
-  archiveMessages(comment: DeletedComment): Promise<ArchivedNewQuestion[]>;
-  /**
-   * Sends New question straight away, skipping the 10-minute batch: used to
-   * replace an archived batch with its Questions that are still live.
-   */
-  resendNewQuestion(
-    trigger: NotificationTrigger<typeof NotificationWorkflow.NewQuestion>
+  archiveMessages(
+    comment: DeletedComment,
+    isDeleted: IsCommentDeleted
   ): Promise<void>;
 }
 
@@ -103,7 +97,7 @@ export type KnockMessagesApi = {
   list(query: {
     source?: string;
     trigger_data: string;
-  }): AsyncIterable<{ id: string; recipient: string | { id?: string } }>;
+  }): AsyncIterable<{ id: string; archived_at?: string | null }>;
   listActivities(
     messageId: string
   ): AsyncIterable<{ data?: Record<string, unknown> | null }>;
@@ -122,9 +116,8 @@ export type KnockMessagesApi = {
 const ARCHIVE_BATCH_SIZE = 50;
 
 /**
- * Every Comment a New question message is about, oldest first. Each activity
- * is one trigger: a batched Question carries its `comment_id`, and a re-sent
- * New question also carries `comment_ids`, every Question it stands for.
+ * Every Question a New question message is about. Each activity is one
+ * trigger, and keeps that Question's own `comment_id`.
  */
 async function commentIdsIn(
   messages: KnockMessagesApi,
@@ -132,38 +125,27 @@ async function commentIdsIn(
 ): Promise<number[]> {
   const ids = new Set<number>();
   for await (const activity of messages.listActivities(messageId)) {
-    const data = activity.data ?? {};
-    if (typeof data.comment_id === "number") ids.add(data.comment_id);
-    if (Array.isArray(data.comment_ids)) {
-      for (const id of data.comment_ids) {
-        if (typeof id === "number") ids.add(id);
-      }
-    }
+    const id = activity.data?.comment_id;
+    if (typeof id === "number") ids.add(id);
   }
-  return [...ids].sort((a, b) => a - b);
-}
-
-function recipientId(recipient: string | { id?: string }): string {
-  return typeof recipient === "string" ? recipient : (recipient.id ?? "");
+  return [...ids];
 }
 
 /**
- * Delivers through Knock. Archiving looks in two places
+ * Delivers through Knock. Knock's message list includes archived messages,
+ * so each lookup skips those already archived. Archiving looks in two places
  * (https://docs.knock.app/designing-workflows/batch-function):
- * - Messages whose trigger data has the `comment_id` (GET /v1/messages with
- *   `trigger_data`, https://docs.knock.app/api-reference/messages/list). That
- *   finds a Comment reply or a lone New question, but a batched message's
- *   data is merged with the newest trigger's values winning, so an earlier
- *   Question's `comment_id` is gone from it.
- * - So New question messages for the Comment's lesson (`source` plus
- *   `trigger_data` on `lesson_id`, the batch key) are checked activity by
- *   activity (GET /v1/messages/{id}/activities,
- *   https://docs.knock.app/api-reference/messages/list_activities), each of
- *   which keeps one trigger's own data. A match archives the whole batch.
- *   A re-sent New question is matched the same way, by the `comment_ids` in
- *   its one activity: `trigger_data` only matches top-level scalar values
- *   (https://docs.knock.app/api-reference/overview/trigger-data-filtering),
- *   so it can't look inside that array.
+ * - Comment reply messages whose trigger data has the `comment_id` (GET
+ *   /v1/messages with `source` and `trigger_data`,
+ *   https://docs.knock.app/api-reference/messages/list).
+ * - New question messages for the Comment's lesson (`trigger_data` on
+ *   `lesson_id`, the batch key), read activity by activity (GET
+ *   /v1/messages/{id}/activities,
+ *   https://docs.knock.app/api-reference/messages/list_activities). A
+ *   batched message's own data is merged with the newest trigger's values
+ *   winning, so only its activities say which Questions it holds. It is
+ *   archived only when it holds the Comment and every Question in it is
+ *   deleted.
  */
 export function knockTransport(knock: KnockClient): NotificationTransport {
   const { messages } = knock;
@@ -176,21 +158,6 @@ export function knockTransport(knock: KnockClient): NotificationTransport {
         cancellation_key: trigger.cancellationKey,
       });
     },
-    // The new-question workflow's Batch step has a step condition,
-    // `data.skip_batch` not_equal_to `true`. A step whose conditions fail is
-    // skipped and the next step runs (step conditions apply to "all function
-    // and channel steps",
-    // https://docs.knock.app/designing-workflows/step-conditions), so this
-    // goes straight to the Feed step. A missing variable resolves to an empty
-    // string (https://docs.knock.app/concepts/conditions), so an ordinary
-    // trigger, without the flag, is still batched.
-    async resendNewQuestion(trigger) {
-      await knock.workflows.trigger(NotificationWorkflow.NewQuestion, {
-        recipients: trigger.recipients,
-        actor: trigger.actor,
-        data: { ...trigger.data, skip_batch: true },
-      });
-    },
     // POST /v1/workflows/{key}/cancel
     // (https://docs.knock.app/api-reference/workflows/cancel). On an open
     // batch it removes just this run; the window stays open for the rest
@@ -201,28 +168,22 @@ export function knockTransport(knock: KnockClient): NotificationTransport {
         recipients,
       });
     },
-    async archiveMessages({ comment_id, lesson_id }) {
+    async archiveMessages({ comment_id, lesson_id }, isDeleted) {
       const messageIds = new Set<string>();
       for await (const message of messages.list({
+        source: NotificationWorkflow.CommentReply,
         trigger_data: JSON.stringify({ comment_id }),
       })) {
-        messageIds.add(message.id);
+        if (!message.archived_at) messageIds.add(message.id);
       }
-      // Every New question message on the lesson, a lone one found above
-      // included, is read activity by activity, both to find the batches the
-      // Comment is in and to report every Question each one held.
-      const newQuestions: ArchivedNewQuestion[] = [];
       for await (const message of messages.list({
         source: NotificationWorkflow.NewQuestion,
         trigger_data: JSON.stringify({ lesson_id }),
       })) {
+        if (message.archived_at) continue;
         const commentIds = await commentIdsIn(messages, message.id);
         if (!commentIds.includes(comment_id)) continue;
-        messageIds.add(message.id);
-        newQuestions.push({
-          recipient: recipientId(message.recipient),
-          comment_ids: commentIds,
-        });
+        if (commentIds.every(isDeleted)) messageIds.add(message.id);
       }
       const ids = [...messageIds];
       for (let i = 0; i < ids.length; i += ARCHIVE_BATCH_SIZE) {
@@ -230,7 +191,6 @@ export function knockTransport(knock: KnockClient): NotificationTransport {
           message_ids: ids.slice(i, i + ARCHIVE_BATCH_SIZE),
         });
       }
-      return newQuestions;
     },
   };
 }
@@ -248,14 +208,6 @@ export function outboxTransport(directory: string): NotificationTransport {
     },
     async archiveMessages(comment) {
       writeToOutbox(directory, "notification-archive", { archive: comment });
-      // Nothing was delivered, so no New question needs re-sending.
-      return [];
-    },
-    async resendNewQuestion(resend) {
-      writeToOutbox(directory, "notification-new-question-resend", {
-        workflowKey: NotificationWorkflow.NewQuestion,
-        resend,
-      });
     },
   };
 }
@@ -404,86 +356,36 @@ function newQuestionCancellationKey(commentId: number) {
  * - A Question still waiting in an open New question batch is cancelled out
  *   of it. Cancelling is enqueued and does nothing once the batch has closed,
  *   so the next step always runs too.
- * - Every delivered message about the Comment is archived, across all
- *   recipients: Comment reply, and New question batched or not.
- * - Each archived New question is re-sent for its Questions still live. Its
- *   read state isn't carried over: Knock runs a trigger asynchronously, so
- *   the new message doesn't exist yet to be marked read.
+ * - Its Comment reply messages are archived, across all recipients, and so is
+ *   a delivered New question holding it once every Question in it is deleted.
+ *   One with a Question still live stays, and the Feed counts only the live
+ *   ones (liveNewQuestion). That also covers a delete just after the window
+ *   closed, too late to cancel and before the message exists to archive.
  */
 export async function archiveCommentNotifications(
   db: Db,
   commentId: number,
   transport: NotificationTransport = defaultTransport()
 ): Promise<void> {
-  let archived: ArchivedNewQuestion[];
   try {
     const comment = getCommentById(db, commentId);
     if (!comment) return;
     if (comment.parentId === null) {
       await cancelNewQuestion(db, comment, transport);
     }
-    archived = await transport.archiveMessages({
-      comment_id: comment.id,
-      lesson_id: comment.lessonId,
-    });
+    await transport.archiveMessages(
+      { comment_id: comment.id, lesson_id: comment.lessonId },
+      (id) => {
+        const question = getCommentById(db, id);
+        return !question || question.deletedAt !== null;
+      }
+    );
   } catch (error) {
     console.error(
       `Archiving Notifications for Comment ${commentId} failed`,
       error
     );
-    return;
   }
-  for (const message of archived) {
-    await resendNewQuestion(db, message, transport);
-  }
-}
-
-/**
- * Replaces an archived New question with one for its Questions that are still
- * live, sent straight away: one Question reads as asked by its asker, more as
- * a count, and it links to the latest. It carries every live Question's id in
- * `comment_ids`, so the Feed counts them and a later delete finds it again.
- * Sends nothing if none is live, or if the archived message's recipient no
- * longer owns the course.
- */
-async function resendNewQuestion(
-  db: Db,
-  archived: ArchivedNewQuestion,
-  transport: NotificationTransport
-): Promise<void> {
-  await deliver(NotificationWorkflow.NewQuestion, async () => {
-    const live = archived.comment_ids
-      .map((id) => getCommentById(db, id))
-      .filter(
-        (comment): comment is Comment =>
-          comment !== undefined &&
-          comment.deletedAt === null &&
-          comment.parentId === null
-      )
-      .sort((a, b) => a.id - b.id);
-    const latest = live.at(-1);
-    if (!latest) return;
-
-    const lesson = getLessonWithCourse(db, latest.lessonId);
-    if (!lesson) return;
-    if (archived.recipient !== knockUserId(lesson.instructorId)) return;
-    const instructor = getUser(db, lesson.instructorId);
-    const asker = getUser(db, latest.userId);
-    if (!instructor || !asker) return;
-
-    await transport.resendNewQuestion({
-      recipients: [personFor(instructor)],
-      actor: personFor(asker),
-      data: {
-        comment_id: latest.id,
-        comment_ids: live.map((comment) => comment.id),
-        lesson_id: lesson.lessonId,
-        actor_name: asker.name,
-        lesson_title: lesson.lessonTitle,
-        url: commentHref(lesson.courseSlug, lesson.lessonId, latest.id),
-      },
-    });
-  });
 }
 
 /** Cancels a deleted Question's New question run out of an open batch. */

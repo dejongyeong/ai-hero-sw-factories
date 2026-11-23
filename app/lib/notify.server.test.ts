@@ -14,7 +14,6 @@ import {
   knockTransport,
   notifyCommentPosted,
   outboxTransport,
-  type ArchivedNewQuestion,
   type DeletedComment,
   type KnockClient,
   type KnockMessagesApi,
@@ -25,15 +24,11 @@ import {
 
 type Recorded = { workflowKey: NotificationWorkflow } & NotificationTrigger;
 
-/**
- * Records what it is asked to do. `archivedNewQuestions` is what Knock would
- * report archiving: the New question messages that held the deleted Comment.
- */
-function recordingTransport(archivedNewQuestions: ArchivedNewQuestion[] = []) {
+/** Records what it is asked to do. */
+function recordingTransport() {
   const triggers: Recorded[] = [];
   const archived: DeletedComment[] = [];
   const cancelled: NotificationCancel[] = [];
-  const resent: NotificationTrigger<"new-question">[] = [];
   const transport: NotificationTransport = {
     async trigger(workflowKey, trigger) {
       triggers.push({ workflowKey, ...trigger });
@@ -41,15 +36,11 @@ function recordingTransport(archivedNewQuestions: ArchivedNewQuestion[] = []) {
     async cancel(request) {
       cancelled.push(request);
     },
-    async archiveMessages(filter) {
-      archived.push(filter);
-      return archivedNewQuestions;
-    },
-    async resendNewQuestion(trigger) {
-      resent.push(trigger);
+    async archiveMessages(comment) {
+      archived.push(comment);
     },
   };
-  return { transport, triggers, archived, cancelled, resent };
+  return { transport, triggers, archived, cancelled };
 }
 
 const failing: NotificationTransport = {
@@ -62,10 +53,58 @@ const failing: NotificationTransport = {
   async archiveMessages() {
     throw new Error("Knock is down");
   },
-  async resendNewQuestion() {
-    throw new Error("Knock is down");
-  },
 };
+
+type StoredMessage = {
+  id: string;
+  source: string;
+  /** Knock's merged data: for a batch, the newest trigger's values win. */
+  data: Record<string, unknown>;
+  activities: { data: Record<string, unknown> }[];
+  recipient?: string;
+  archived_at?: string | null;
+};
+
+/**
+ * Knock's messages API, as far as the archive uses it, over a fixed store.
+ * Like Knock's, its list includes archived messages.
+ */
+function fakeKnockMessages(stored: StoredMessage[]) {
+  const archivedBatches: string[][] = [];
+  // Knock's trigger_data filter matches top-level scalar values only.
+  const matches = (data: Record<string, unknown>, filter?: string) =>
+    !filter ||
+    Object.entries(JSON.parse(filter)).every(([k, v]) => data[k] === v);
+  const messages: KnockMessagesApi = {
+    async *list(query) {
+      for (const message of stored) {
+        if (query.source && message.source !== query.source) continue;
+        if (matches(message.data, query.trigger_data)) {
+          yield {
+            id: message.id,
+            recipient: message.recipient ?? "cadence-1",
+            archived_at: message.archived_at ?? null,
+          };
+        }
+      }
+    },
+    async *listActivities(messageId) {
+      yield* stored.find((m) => m.id === messageId)?.activities ?? [];
+    },
+    batch: {
+      async archive({ message_ids }) {
+        archivedBatches.push(message_ids);
+      },
+    },
+  };
+  const knock: KnockClient = {
+    workflows: {
+      async cancel() {},
+    } as unknown as KnockClient["workflows"],
+    messages,
+  };
+  return { knock, archivedBatches };
+}
 
 let db: Db;
 let student: typeof schema.users.$inferSelect;
@@ -355,7 +394,7 @@ describe("archiveCommentNotifications", () => {
     ]);
   });
 
-  describe("re-sending a delivered New question", () => {
+  describe("archiving a delivered New question", () => {
     function softDelete(commentId: number) {
       db.update(schema.comments)
         .set({ deletedAt: new Date().toISOString() })
@@ -363,100 +402,69 @@ describe("archiveCommentNotifications", () => {
         .run();
     }
 
-    it("re-sends one New question for the Questions still live, linked to the latest", async () => {
+    /** A delivered New question batch holding `ids`, newest last. */
+    function batchOf(id: string, ids: number[], archived_at?: string) {
+      const activities = ids.map((comment_id) => ({
+        data: { comment_id, lesson_id: lessonId },
+      }));
+      return {
+        id,
+        source: "new-question",
+        data: activities.at(-1)!.data,
+        activities,
+        archived_at,
+      };
+    }
+
+    it("leaves it in the Feed while any Question in it is live", async () => {
       const q1 = postComment(db, student.id, lessonId, null, "One?");
       const q2 = postComment(db, student.id, lessonId, null, "Two?");
-      const q3 = postComment(db, otherStudent.id, lessonId, null, "Three?");
-      softDelete(q1.id);
-      const { transport, resent } = recordingTransport([
-        {
-          recipient: `cadence-${instructor.id}`,
-          comment_ids: [q1.id, q2.id, q3.id],
-        },
+      softDelete(q2.id);
+      const { knock, archivedBatches } = fakeKnockMessages([
+        batchOf("batch", [q1.id, q2.id]),
       ]);
 
-      await archiveCommentNotifications(db, q1.id, transport);
+      await archiveCommentNotifications(db, q2.id, knockTransport(knock));
 
-      expect(resent).toEqual([
-        {
-          recipients: [
-            {
-              id: `cadence-${instructor.id}`,
-              name: "Sarah",
-              email: "sarah@example.com",
-            },
-          ],
-          actor: {
-            id: `cadence-${otherStudent.id}`,
-            name: "Maya",
-            email: "maya@example.com",
-          },
-          data: {
-            comment_id: q3.id,
-            comment_ids: [q2.id, q3.id],
-            lesson_id: lessonId,
-            actor_name: "Maya",
-            lesson_title: "Generics",
-            url: `/courses/intro-ts/lessons/${lessonId}#comment-${q3.id}`,
-          },
-        },
-      ]);
+      expect(archivedBatches.flat()).toEqual([]);
     });
 
-    it("leaves out every Question deleted since the batch was sent", async () => {
+    it("archives it once every Question in it is deleted", async () => {
       const q1 = postComment(db, student.id, lessonId, null, "One?");
       const q2 = postComment(db, otherStudent.id, lessonId, null, "Two?");
-      const q3 = postComment(db, student.id, lessonId, null, "Three?");
-      softDelete(q3.id);
       softDelete(q1.id);
-      const { transport, resent } = recordingTransport([
-        {
-          recipient: `cadence-${instructor.id}`,
-          comment_ids: [q1.id, q2.id, q3.id],
-        },
+      softDelete(q2.id);
+      const { knock, archivedBatches } = fakeKnockMessages([
+        batchOf("batch", [q1.id, q2.id]),
       ]);
 
-      await archiveCommentNotifications(db, q1.id, transport);
+      await archiveCommentNotifications(db, q2.id, knockTransport(knock));
 
-      expect(resent.map((t) => t.data)).toEqual([
-        {
-          comment_id: q2.id,
-          comment_ids: [q2.id],
-          lesson_id: lessonId,
-          actor_name: "Maya",
-          lesson_title: "Generics",
-          url: `/courses/intro-ts/lessons/${lessonId}#comment-${q2.id}`,
-        },
-      ]);
+      expect(archivedBatches.flat()).toEqual(["batch"]);
     });
 
-    it("re-sends nothing when no Question in it is still live", async () => {
+    it("archives a lone New question when its Question is deleted", async () => {
       const q1 = postComment(db, student.id, lessonId, null, "One?");
       softDelete(q1.id);
-      const { transport, resent } = recordingTransport([
-        { recipient: `cadence-${instructor.id}`, comment_ids: [q1.id] },
+      const { knock, archivedBatches } = fakeKnockMessages([
+        batchOf("lone", [q1.id]),
       ]);
 
-      await archiveCommentNotifications(db, q1.id, transport);
+      await archiveCommentNotifications(db, q1.id, knockTransport(knock));
 
-      expect(resent).toEqual([]);
+      expect(archivedBatches.flat()).toEqual(["lone"]);
     });
 
-    it("does not throw when the re-send fails", async () => {
+    it("skips a New question that is already archived", async () => {
       const q1 = postComment(db, student.id, lessonId, null, "One?");
-      const q2 = postComment(db, student.id, lessonId, null, "Two?");
       softDelete(q1.id);
-      const { transport } = recordingTransport([
-        {
-          recipient: `cadence-${instructor.id}`,
-          comment_ids: [q1.id, q2.id],
-        },
+      const { knock, archivedBatches } = fakeKnockMessages([
+        batchOf("old", [q1.id], "2026-11-23T10:00:00Z"),
       ]);
-      transport.resendNewQuestion = failing.resendNewQuestion;
 
-      await expect(
-        archiveCommentNotifications(db, q1.id, transport)
-      ).resolves.toBeUndefined();
+      await archiveCommentNotifications(db, q1.id, knockTransport(knock));
+
+      expect(archivedBatches.flat()).toEqual([]);
     });
   });
 
@@ -504,10 +512,10 @@ describe("outboxTransport", () => {
   it("records an archive request in the outbox when there is no Knock key", async () => {
     const directory = mkdtempSync(join(tmpdir(), "outbox-"));
 
-    await outboxTransport(directory).archiveMessages({
-      comment_id: 42,
-      lesson_id: 3,
-    });
+    await outboxTransport(directory).archiveMessages(
+      { comment_id: 42, lesson_id: 3 },
+      () => true
+    );
 
     const files = readdirSync(directory);
     expect(files).toHaveLength(1);
@@ -536,31 +544,6 @@ describe("outboxTransport", () => {
         recipients: ["cadence-1"],
       },
     });
-  });
-
-  it("records a re-send in the outbox when there is no Knock key", async () => {
-    const directory = mkdtempSync(join(tmpdir(), "outbox-"));
-    const resend = {
-      recipients: [
-        { id: "cadence-1", name: "Sarah", email: "sarah@example.com" },
-      ],
-      data: {
-        comment_id: 9,
-        comment_ids: [8, 9],
-        lesson_id: 3,
-        actor_name: "Liam",
-        lesson_title: "Generics",
-        url: "/courses/intro-ts/lessons/3#comment-9",
-      },
-    };
-
-    await outboxTransport(directory).resendNewQuestion(resend);
-
-    const files = readdirSync(directory);
-    expect(files).toHaveLength(1);
-    expect(files[0]).toMatch(/-notification-new-question-resend\.json$/);
-    const written = JSON.parse(readFileSync(join(directory, files[0]), "utf8"));
-    expect(written).toEqual({ workflowKey: "new-question", resend });
   });
 });
 
@@ -621,26 +604,6 @@ describe("knockTransport trigger and cancel", () => {
     ]);
   });
 
-  it("re-sends New question flagged to skip the batch step", async () => {
-    const { workflows, triggered } = fakeKnockWorkflows();
-    const data = { ...newQuestionData, comment_ids: [8, 9] };
-
-    await knockTransport({ workflows, messages: noMessages }).resendNewQuestion(
-      { recipients: [person], data }
-    );
-
-    expect(triggered).toEqual([
-      {
-        key: "new-question",
-        body: {
-          recipients: [person],
-          actor: undefined,
-          data: { ...data, skip_batch: true },
-        },
-      },
-    ]);
-  });
-
   it("cancels by key for the given recipients", async () => {
     const { workflows, cancelled } = fakeKnockWorkflows();
 
@@ -660,95 +623,78 @@ describe("knockTransport trigger and cancel", () => {
 });
 
 describe("knockTransport archiveMessages", () => {
-  type StoredMessage = {
-    id: string;
-    source: string;
-    /** Knock's merged data: for a batch, the newest trigger's values win. */
-    data: Record<string, unknown>;
-    activities: { data: Record<string, unknown> }[];
-    recipient?: string;
+  const batched = (id: string, ids: number[], lesson_id = 7) => {
+    const activities = ids.map((comment_id) => ({
+      data: { comment_id, lesson_id },
+    }));
+    return {
+      id,
+      source: "new-question",
+      data: activities.at(-1)!.data,
+      activities,
+    };
   };
+  const deleted =
+    (...ids: number[]) =>
+    (commentId: number) =>
+      ids.includes(commentId);
 
-  /** Knock's messages API, as far as the archive uses it, over a fixed store. */
-  function fakeKnockMessages(stored: StoredMessage[]) {
-    const archivedBatches: string[][] = [];
-    // Knock's trigger_data filter matches top-level scalar values only.
-    const matches = (data: Record<string, unknown>, filter?: string) =>
-      !filter ||
-      Object.entries(JSON.parse(filter)).every(([k, v]) => data[k] === v);
-    const messages: KnockMessagesApi = {
-      async *list(query) {
-        for (const message of stored) {
-          if (query.source && message.source !== query.source) continue;
-          if (matches(message.data, query.trigger_data)) {
-            yield {
-              id: message.id,
-              source: { key: message.source },
-              recipient: message.recipient ?? "cadence-1",
-            };
-          }
-        }
-      },
-      async *listActivities(messageId) {
-        yield* stored.find((m) => m.id === messageId)?.activities ?? [];
-      },
-      batch: {
-        async archive({ message_ids }) {
-          archivedBatches.push(message_ids);
-        },
-      },
-    };
-    const knock: KnockClient = {
-      workflows: {} as KnockClient["workflows"],
-      messages,
-    };
-    return { knock, archivedBatches };
-  }
-
-  it("archives a batched New question when an earlier Question in it is deleted", async () => {
+  it("archives a New question on the lesson once every Question in it is deleted", async () => {
     const { knock, archivedBatches } = fakeKnockMessages([
-      {
-        id: "batched",
-        source: "new-question",
-        data: { comment_id: 2, lesson_id: 7 },
-        activities: [
-          { data: { comment_id: 1, lesson_id: 7 } },
-          { data: { comment_id: 2, lesson_id: 7 } },
-        ],
-      },
-      {
-        id: "other-lesson",
-        source: "new-question",
-        data: { comment_id: 3, lesson_id: 8 },
-        activities: [{ data: { comment_id: 3, lesson_id: 8 } }],
-      },
+      batched("batched", [1, 2]),
+      batched("other-lesson", [3], 8),
     ]);
 
-    await knockTransport(knock).archiveMessages({
-      comment_id: 1,
-      lesson_id: 7,
-    });
+    await knockTransport(knock).archiveMessages(
+      { comment_id: 1, lesson_id: 7 },
+      deleted(1, 2, 3)
+    );
 
     expect(archivedBatches.flat()).toEqual(["batched"]);
   });
 
-  it("leaves a batched New question alone when none of its Questions was deleted", async () => {
+  it("leaves a New question alone while any Question in it is live", async () => {
     const { knock, archivedBatches } = fakeKnockMessages([
+      batched("batched", [1, 2]),
+    ]);
+
+    await knockTransport(knock).archiveMessages(
+      { comment_id: 2, lesson_id: 7 },
+      deleted(2)
+    );
+
+    expect(archivedBatches.flat()).toEqual([]);
+  });
+
+  it("leaves a New question alone that doesn't hold the deleted Comment", async () => {
+    const { knock, archivedBatches } = fakeKnockMessages([
+      batched("batched", [1, 2]),
+    ]);
+
+    await knockTransport(knock).archiveMessages(
+      { comment_id: 5, lesson_id: 7 },
+      deleted(1, 2, 5)
+    );
+
+    expect(archivedBatches.flat()).toEqual([]);
+  });
+
+  it("skips messages that are already archived", async () => {
+    const { knock, archivedBatches } = fakeKnockMessages([
+      { ...batched("old", [1]), archived_at: "2026-11-23T10:00:00Z" },
       {
-        id: "batched",
-        source: "new-question",
-        data: { comment_id: 2, lesson_id: 7 },
-        activities: [
-          { data: { comment_id: 1, lesson_id: 7 } },
-          { data: { comment_id: 2, lesson_id: 7 } },
-        ],
+        id: "old-reply",
+        source: "comment-reply",
+        data: { comment_id: 1 },
+        activities: [{ data: { comment_id: 1 } }],
+        archived_at: "2026-11-23T10:00:00Z",
       },
     ]);
 
-    await knockTransport(knock).archiveMessages({
-      comment_id: 5,
-      lesson_id: 7,
-    });
+    await knockTransport(knock).archiveMessages(
+      { comment_id: 1, lesson_id: 7 },
+      deleted(1)
+    );
 
     expect(archivedBatches.flat()).toEqual([]);
   });
@@ -765,70 +711,11 @@ describe("knockTransport archiveMessages", () => {
       reply("for-maya"),
     ]);
 
-    await knockTransport(knock).archiveMessages({
-      comment_id: 9,
-      lesson_id: 7,
-    });
+    await knockTransport(knock).archiveMessages(
+      { comment_id: 9, lesson_id: 7 },
+      deleted(9)
+    );
 
     expect(archivedBatches.flat().sort()).toEqual(["for-liam", "for-maya"]);
-  });
-
-  it("reports each archived New question with every Question in it", async () => {
-    const { knock } = fakeKnockMessages([
-      {
-        id: "batched",
-        source: "new-question",
-        data: { comment_id: 2, lesson_id: 7 },
-        activities: [
-          { data: { comment_id: 1, lesson_id: 7 } },
-          { data: { comment_id: 2, lesson_id: 7 } },
-        ],
-      },
-    ]);
-
-    const archived = await knockTransport(knock).archiveMessages({
-      comment_id: 1,
-      lesson_id: 7,
-    });
-
-    expect(archived).toEqual([{ recipient: "cadence-1", comment_ids: [1, 2] }]);
-  });
-
-  it("finds a re-sent New question by any Question it carries", async () => {
-    const resentData = { comment_id: 5, lesson_id: 7, comment_ids: [3, 5] };
-    const { knock, archivedBatches } = fakeKnockMessages([
-      {
-        id: "resent",
-        source: "new-question",
-        data: resentData,
-        activities: [{ data: resentData }],
-      },
-    ]);
-
-    const archived = await knockTransport(knock).archiveMessages({
-      comment_id: 3,
-      lesson_id: 7,
-    });
-
-    expect(archivedBatches.flat()).toEqual(["resent"]);
-    expect(archived).toEqual([{ recipient: "cadence-1", comment_ids: [3, 5] }]);
-  });
-
-  it("reports no New question when only a Comment reply was archived", async () => {
-    const { knock } = fakeKnockMessages([
-      {
-        id: "reply",
-        source: "comment-reply",
-        data: { comment_id: 9 },
-        activities: [{ data: { comment_id: 9 } }],
-      },
-    ]);
-
-    const archived = await knockTransport(knock).archiveMessages({
-      comment_id: 9,
-      lesson_id: 7,
-    });
-
-    expect(archived).toEqual([]);
   });
 });

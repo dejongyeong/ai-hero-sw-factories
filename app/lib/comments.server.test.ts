@@ -9,6 +9,7 @@ import {
   CommentNotFoundError,
   deleteComment,
   editComment,
+  liveCommentIds,
   postComment,
 } from "./comments.server";
 
@@ -166,5 +167,31 @@ describe("deleteComment", () => {
     expect(() =>
       deleteComment(db, lessonId, question.id, asStudent())
     ).toThrow(CommentNotFoundError);
+  });
+});
+
+describe("liveCommentIds", () => {
+  it("returns the Comments still live on the viewer's own courses", () => {
+    const kept = postComment(db, student.id, lessonId, null, "Kept?");
+    const gone = postComment(db, student.id, otherLessonId, null, "Gone?");
+    deleteComment(db, otherLessonId, gone.id, asStudent());
+
+    expect(liveCommentIds(db, instructor.id, [kept.id, gone.id])).toEqual([
+      kept.id,
+    ]);
+  });
+
+  it("says nothing about Comments on someone else's course", () => {
+    const question = postComment(db, student.id, lessonId, null, "Why?");
+
+    expect(liveCommentIds(db, student.id, [question.id])).toEqual([]);
+  });
+
+  it("ignores ids that don't exist", () => {
+    expect(liveCommentIds(db, instructor.id, [999])).toEqual([]);
+  });
+
+  it("returns nothing for no ids", () => {
+    expect(liveCommentIds(db, instructor.id, [])).toEqual([]);
   });
 });

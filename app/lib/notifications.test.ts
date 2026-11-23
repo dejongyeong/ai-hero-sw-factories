@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { describeNotification } from "./notifications";
+import {
+  describeNotification,
+  liveNewQuestion,
+  newQuestionCommentIds,
+} from "./notifications";
 
 describe("describeNotification", () => {
   it("files a Comment reply under Discussions", () => {
@@ -71,32 +75,109 @@ describe("describeNotification", () => {
       { text: "Generics", bold: true },
     ]);
   });
+});
 
-  it("counts a re-sent New question by the live Questions it carries", () => {
+describe("liveNewQuestion", () => {
+  const question = (id: number, actor_name = "Liam") => ({
+    comment_id: id,
+    lesson_id: 3,
+    actor_name,
+    lesson_title: "Generics",
+    url: `/courses/intro-ts/lessons/3#comment-${id}`,
+  });
+  // A batch of Questions 1, 2 and 3: Knock's merged data is the newest's.
+  const batch = {
+    data: question(3, "Maya"),
+    total_activities: 3,
+    activities: [
+      { data: question(1) },
+      { data: question(2, "Noor") },
+      { data: question(3, "Maya") },
+    ],
+  };
+
+  it("counts every Question when all are live, describing the latest", () => {
+    expect(liveNewQuestion(batch, new Set([1, 2, 3]))).toEqual({
+      count: 3,
+      data: question(3, "Maya"),
+    });
+  });
+
+  it("leaves deleted Questions out of the count", () => {
+    expect(liveNewQuestion(batch, new Set([1, 3]))?.count).toBe(2);
+  });
+
+  it("describes and links to the latest live Question when the latest is deleted", () => {
+    expect(liveNewQuestion(batch, new Set([1, 2]))).toEqual({
+      count: 2,
+      data: question(2, "Noor"),
+    });
+  });
+
+  it("reads as the one live Question's asker when only one is left", () => {
     expect(
       describeNotification(
         "new-question",
-        { ...newQuestion, comment_ids: [4, 9] },
-        1
+        liveNewQuestion(batch, new Set([2]))?.data,
+        liveNewQuestion(batch, new Set([2]))?.count
       )?.sentence
     ).toEqual([
-      { text: "2 new questions", bold: true },
-      { text: " on ", bold: false },
+      { text: "Noor", bold: true },
+      { text: " asked a question on ", bold: false },
       { text: "Generics", bold: true },
     ]);
   });
 
-  it("describes a re-sent New question for one live Question by its asker", () => {
+  it("hides the row when no Question in it is live", () => {
+    expect(liveNewQuestion(batch, new Set())).toBeNull();
+  });
+
+  it("subtracts only the deleted Questions it can see when Knock lists fewer activities than the total", () => {
+    // 12 Questions, of which Knock lists the last 10 (3 to 12); 4 is deleted.
+    const listed = Array.from({ length: 10 }, (_, i) => ({
+      data: question(i + 3),
+    }));
+    const live = new Set(listed.map((a) => a.data.comment_id));
+    live.delete(4);
     expect(
-      describeNotification(
-        "new-question",
-        { ...newQuestion, comment_ids: [9] },
-        1
-      )?.sentence
-    ).toEqual([
-      { text: "Liam", bold: true },
-      { text: " asked a question on ", bold: false },
-      { text: "Generics", bold: true },
-    ]);
+      liveNewQuestion(
+        { data: question(12), total_activities: 12, activities: listed },
+        live
+      )
+    ).toEqual({ count: 11, data: question(12) });
+  });
+
+  it("falls back to Knock's count and data when liveness is unknown", () => {
+    expect(liveNewQuestion(batch, null)).toEqual({
+      count: 3,
+      data: question(3, "Maya"),
+    });
+  });
+
+  it("counts a lone New question without activities as one", () => {
+    expect(liveNewQuestion({ data: question(5) }, new Set([5]))).toEqual({
+      count: 1,
+      data: question(5),
+    });
+  });
+});
+
+describe("newQuestionCommentIds", () => {
+  it("collects the Question ids from each activity, ignoring what it can't read", () => {
+    expect(
+      newQuestionCommentIds({
+        data: { comment_id: 9 },
+        activities: [
+          { data: { comment_id: 7 } },
+          { data: null },
+          { data: { comment_id: "8" } },
+          { data: { comment_id: 9 } },
+        ],
+      })
+    ).toEqual([7, 9]);
+  });
+
+  it("uses the item's own data when it has no activities", () => {
+    expect(newQuestionCommentIds({ data: { comment_id: 5 } })).toEqual([5]);
   });
 });

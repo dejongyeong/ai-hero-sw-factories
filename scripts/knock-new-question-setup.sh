@@ -268,10 +268,7 @@ step "Batch window: ${BOLD}10 minutes${RESET}, fixed. Leave ${BOLD}Extend window
 note "Knock's windows are fixed by default; extending would make the window slide."
 step "Batch key: ${BOLD}data.lesson_id${RESET}, so Questions on one lesson batch together."
 note "The app sends lesson_id on every New question trigger for exactly this."
-step "On the Batch step, open ${BOLD}Conditions${RESET} and add one: ${BOLD}data.skip_batch${RESET} ${BOLD}is not equal to${RESET} ${BOLD}true${RESET}."
-note "Deleting a batched Question re-sends the batch's live Questions with skip_batch: true,"
-note "so that one trigger skips the Batch step and reaches the Feed straight away."
-note "See https://docs.knock.app/designing-workflows/step-conditions"
+note "No step conditions: every New question trigger is batched."
 step "Save the step."
 pause "Press Enter once the Batch step is saved"
 
@@ -280,11 +277,10 @@ step "Below the Batch step, add a channel step of type ${BOLD}In-app feed${RESET
 step "Pick the same Feed channel comment-reply uses (its id is KNOCK_FEED_CHANNEL_ID in .env)."
 step "Edit its template. Choose the ${BOLD}Standard${RESET} variant (the whole row is the link)."
 step "Markdown body:"
-say  "    ${BOLD}{% assign n = total_activities %}{% if data.comment_ids %}{% assign n = data.comment_ids.size %}{% endif %}{% if n > 1 %}**{{ n }} new questions** on **{{ data.lesson_title }}**{% else %}**{{ data.actor_name }}** asked a question on **{{ data.lesson_title }}**{% endif %}${RESET}"
-note "A New question re-sent after a delete is one activity carrying comment_ids, hence n."
+say  "    ${BOLD}{% if total_activities > 1 %}**{{ total_activities }} new questions** on **{{ data.lesson_title }}**{% else %}**{{ data.actor_name }}** asked a question on **{{ data.lesson_title }}**{% endif %}${RESET}"
 step "Action URL: replace the default with ${BOLD}{{ vars.app_url }}{{ data.url }}${RESET}"
 note "In a batch, data is the latest Question's, so the link lands on the newest one."
-note "Cadence's bell builds its own sentence from the data, but the step still needs a template."
+note "Cadence's bell builds its own sentence, counting only Questions still live, but the step still needs a template."
 step "Don't add an email step: New question is Feed only."
 step "Save the step."
 pause "Press Enter once the Feed step is saved"
@@ -313,9 +309,9 @@ pause
 finish
 say "Next: run ${BOLD}npm run dev${RESET}, post a few Questions on one lesson as a Student, then"
 say "switch to the course's Instructor in the DevUI panel: within 10 minutes the bell shows"
-say "one batched Notification. Delete one of those Questions and it is replaced at once by"
-say "one for the Questions still live. Delete a Question before the 10 minutes are up and"
-say "it never shows: it is cancelled out of the open batch."
+say "one batched Notification. Delete one of those Questions and, on the next open, the bell"
+say "counts one fewer; delete them all and the Notification goes. Delete a Question before"
+say "the 10 minutes are up and it never shows: it is cancelled out of the open batch."
 printf '\n'
 }
 

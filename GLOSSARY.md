@@ -122,7 +122,7 @@ Anything posted in a lesson's discussion: a Question, a Reply, or a top-level po
 _Avoid_: Post, Message
 
 **Question**:
-A top-level Comment on a lesson by anyone other than the course's Instructor or a Platform Admin. The course's Instructor is told of it by a New question, batched per lesson over 10 minutes; Platform Admins can answer it but are not notified. A deleted Question drops out of its New question and is no longer counted, whether or not the batch had been sent.
+A top-level Comment on a lesson by anyone other than the course's Instructor or a Platform Admin. The course's Instructor is told of it by a New question, batched per lesson over 10 minutes; Platform Admins can answer it but are not notified. A deleted Question drops out of its New question and is no longer counted, whether or not the batch had been sent: cancelled out of a batch still open, or left out of the count when the Feed shows one already sent.
 _Avoid_: Comment (on its own), Thread, Post, Top-level comment
 
 **Reply**:
@@ -152,5 +152,5 @@ The Notification telling the author of a Comment that someone else posted a Repl
 _Avoid_: Reply notification, Reply alert
 
 **New question**:
-The Notification telling a course's Instructor that a Question was asked on one of their lessons, batched per lesson over a fixed 10-minute window so a burst reads as one, such as "3 new questions on Generics". A Question deleted while the batch is still open is taken out of it. Once the batch has been sent, deleting a Question in it replaces it straight away with one New question for the Questions still live, linked to the latest, with no new wait. If none is live, it simply disappears from the Feed.
+The Notification telling a course's Instructor that a Question was asked on one of their lessons, batched per lesson over a fixed 10-minute window so a burst reads as one, such as "3 new questions on Generics". A Question deleted while the batch is still open is taken out of it. Once the batch has been sent, the Feed counts only the Questions in it still live, and reads and links as the latest live one, such as "Liam asked a question on Generics" when one is left. When none is live, it disappears from the Feed.
 _Avoid_: Question notification, New comment
