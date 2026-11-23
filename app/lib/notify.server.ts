@@ -14,6 +14,7 @@ import { knockConfig, knockUserId } from "~/lib/knock.server";
 import { getCommentById } from "~/lib/comments.server";
 import { writeToOutbox } from "~/lib/outbox.server";
 import { commentHref } from "~/lib/comment-links";
+import { courseHref } from "~/lib/course-links";
 import { refundRequestHref } from "~/lib/refund-request-links";
 import { formatPrice } from "~/lib/utils";
 import {
@@ -420,12 +421,17 @@ async function cancelNewQuestion(
   }
 }
 
-function getRefundRequestWithPurchase(db: Db, refundRequestId: number) {
+/**
+ * What a Refund Request's Notifications say: its amount, its course, and who
+ * raised it. refund_requests has no raised-by column; the Purchase's buyer
+ * is the raiser, because raiseRefundRequest refuses anyone else.
+ */
+function getRefundRequestForNotification(db: Db, refundRequestId: number) {
   return db
     .select({
       id: refundRequests.id,
       amountPaid: purchases.amountPaid,
-      buyerId: purchases.userId,
+      raiserId: purchases.userId,
       courseTitle: courses.title,
       courseSlug: courses.slug,
     })
@@ -434,6 +440,16 @@ function getRefundRequestWithPurchase(db: Db, refundRequestId: number) {
     .innerJoin(courses, eq(purchases.courseId, courses.id))
     .where(eq(refundRequests.id, refundRequestId))
     .get();
+}
+
+/** Every Platform Admin except the given user. */
+function getOtherPlatformAdmins(db: Db, userId: number) {
+  return db
+    .select()
+    .from(users)
+    .where(and(eq(users.role, UserRole.Admin), ne(users.id, userId)))
+    .orderBy(users.id)
+    .all();
 }
 
 /**
@@ -450,17 +466,12 @@ export async function notifyRefundRequestRaised(
   transport: NotificationTransport = defaultTransport()
 ): Promise<void> {
   try {
-    const request = getRefundRequestWithPurchase(db, refundRequestId);
-    const raiser = request && getUser(db, request.buyerId);
+    const request = getRefundRequestForNotification(db, refundRequestId);
+    const raiser = request && getUser(db, request.raiserId);
     if (!request || !raiser) return;
 
     await deliver(NotificationWorkflow.RefundRequestRaised, async () => {
-      const admins = db
-        .select()
-        .from(users)
-        .where(and(eq(users.role, UserRole.Admin), ne(users.id, raiser.id)))
-        .orderBy(users.id)
-        .all();
+      const admins = getOtherPlatformAdmins(db, raiser.id);
       if (admins.length === 0) return;
 
       await transport.trigger(NotificationWorkflow.RefundRequestRaised, {
@@ -483,7 +494,7 @@ export async function notifyRefundRequestRaised(
         data: {
           refund_request_id: request.id,
           course_title: request.courseTitle,
-          url: `/courses/${request.courseSlug}`,
+          url: courseHref(request.courseSlug),
         },
       });
     });
