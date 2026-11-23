@@ -16,6 +16,8 @@ import {
   ChevronRight,
   MessageCircleQuestion,
   MessageSquareReply,
+  ReceiptText,
+  Undo2,
 } from "lucide-react";
 import { cn, formatRelativeTime } from "~/lib/utils";
 import {
@@ -132,9 +134,7 @@ function LiveBell() {
 
   return (
     <BellPopover unreadCount={unreadCount}>
-      {(close) => (
-        <LivePanel load={load} settings={settings} onClose={close} />
-      )}
+      {(close) => <LivePanel load={load} settings={settings} onClose={close} />}
     </BellPopover>
   );
 }
@@ -591,6 +591,14 @@ const ROW_ICONS = {
   [NotificationWorkflow.NewQuestion]: {
     icon: <MessageCircleQuestion className="size-4" />,
     tone: "bg-violet-100 text-violet-600 dark:bg-violet-950",
+  },
+  [NotificationWorkflow.RefundRequestRaised]: {
+    icon: <Undo2 className="size-4" />,
+    tone: "bg-amber-100 text-amber-600 dark:bg-amber-950",
+  },
+  [NotificationWorkflow.RefundRequestReceived]: {
+    icon: <ReceiptText className="size-4" />,
+    tone: "bg-emerald-100 text-emerald-600 dark:bg-emerald-950",
   },
 } satisfies Record<NotificationWorkflow, RowIcon>;
 

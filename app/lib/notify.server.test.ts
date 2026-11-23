@@ -8,11 +8,13 @@ import { CourseStatus, UserRole } from "~/db/schema";
 import type { Db } from "~/db";
 import { createTestDb } from "~/test/setup";
 import { postComment } from "./comments.server";
+import { raiseRefundRequest } from "./refunds.server";
 import type { NotificationWorkflow } from "./notifications";
 import {
   archiveCommentNotifications,
   knockTransport,
   notifyCommentPosted,
+  notifyRefundRequestRaised,
   outboxTransport,
   type DeletedComment,
   type KnockClient,
@@ -111,6 +113,7 @@ let student: typeof schema.users.$inferSelect;
 let otherStudent: typeof schema.users.$inferSelect;
 let instructor: typeof schema.users.$inferSelect;
 let lessonId: number;
+let courseId: number;
 
 beforeEach(() => {
   db = createTestDb();
@@ -153,6 +156,7 @@ beforeEach(() => {
     })
     .returning()
     .get();
+  courseId = course.id;
   const courseModule = db
     .insert(schema.modules)
     .values({ courseId: course.id, title: "Basics", position: 1 })
@@ -476,6 +480,165 @@ describe("archiveCommentNotifications", () => {
     await archiveCommentNotifications(db, reply.id, transport);
 
     expect(cancelled).toEqual([]);
+  });
+});
+
+describe("notifyRefundRequestRaised", () => {
+  function addAdmin(name: string) {
+    return db
+      .insert(schema.users)
+      .values({
+        name,
+        email: `${name.toLowerCase()}@example.com`,
+        role: UserRole.Admin,
+      })
+      .returning()
+      .get();
+  }
+
+  function raise(buyerId: number, amountPaid = 7900) {
+    const purchase = db
+      .insert(schema.purchases)
+      .values({ userId: buyerId, courseId, amountPaid })
+      .returning()
+      .get();
+    const raised = raiseRefundRequest(
+      db,
+      purchase.id,
+      buyerId,
+      "It wasn't what I expected.",
+      new Date()
+    );
+    if (!raised.ok) throw new Error(raised.error);
+    return raised.refundRequestId;
+  }
+
+  function sent(triggers: Recorded[], workflow: string) {
+    return triggers.filter((t) => t.workflowKey === workflow);
+  }
+
+  it("sends Refund Request raised to every Platform Admin", async () => {
+    const ada = addAdmin("Ada");
+    const ben = addAdmin("Ben");
+    const id = raise(student.id);
+    const { transport, triggers } = recordingTransport();
+
+    await notifyRefundRequestRaised(db, id, transport);
+
+    const raised = sent(triggers, "refund-request-raised");
+    expect(raised).toHaveLength(1);
+    expect(raised[0].recipients).toEqual([
+      { id: `cadence-${ada.id}`, name: "Ada", email: "ada@example.com" },
+      { id: `cadence-${ben.id}`, name: "Ben", email: "ben@example.com" },
+    ]);
+  });
+
+  it("leaves out a Platform Admin who raised the Refund Request themselves", async () => {
+    const ada = addAdmin("Ada");
+    const ben = addAdmin("Ben");
+    const id = raise(ben.id);
+    const { transport, triggers } = recordingTransport();
+
+    await notifyRefundRequestRaised(db, id, transport);
+
+    expect(
+      sent(triggers, "refund-request-raised").map((t) =>
+        t.recipients.map((r) => r.id)
+      )
+    ).toEqual([[`cadence-${ada.id}`]]);
+  });
+
+  it("sends no Refund Request raised when no other Platform Admin exists", async () => {
+    const ada = addAdmin("Ada");
+    const id = raise(ada.id);
+    const { transport, triggers } = recordingTransport();
+
+    await notifyRefundRequestRaised(db, id, transport);
+
+    expect(sent(triggers, "refund-request-raised")).toEqual([]);
+  });
+
+  it("carries the Student, course, amount and a link to the card on the Open queue", async () => {
+    addAdmin("Ada");
+    const id = raise(student.id, 7900);
+    const { transport, triggers } = recordingTransport();
+
+    await notifyRefundRequestRaised(db, id, transport);
+
+    const [raised] = sent(triggers, "refund-request-raised");
+    expect(raised.actor).toEqual({
+      id: `cadence-${student.id}`,
+      name: "Liam",
+      email: "liam@example.com",
+    });
+    expect(raised.data).toEqual({
+      refund_request_id: id,
+      actor_name: "Liam",
+      course_title: "Introduction to TypeScript",
+      amount: "$79.00",
+      url: `/admin/refund-requests?status=open#refund-request-${id}`,
+    });
+  });
+
+  it("sends Refund Request received to the person who raised it", async () => {
+    addAdmin("Ada");
+    const id = raise(student.id);
+    const { transport, triggers } = recordingTransport();
+
+    await notifyRefundRequestRaised(db, id, transport);
+
+    const received = sent(triggers, "refund-request-received");
+    expect(received).toHaveLength(1);
+    expect(received[0].recipients).toEqual([
+      { id: `cadence-${student.id}`, name: "Liam", email: "liam@example.com" },
+    ]);
+    expect(received[0].data).toEqual({
+      refund_request_id: id,
+      course_title: "Introduction to TypeScript",
+      url: "/courses/intro-ts",
+    });
+  });
+
+  it("sends Refund Request received to a Platform Admin who raised one", async () => {
+    const ada = addAdmin("Ada");
+    const id = raise(ada.id);
+    const { transport, triggers } = recordingTransport();
+
+    await notifyRefundRequestRaised(db, id, transport);
+
+    expect(
+      sent(triggers, "refund-request-received").map((t) =>
+        t.recipients.map((r) => r.id)
+      )
+    ).toEqual([[`cadence-${ada.id}`]]);
+  });
+
+  it("still sends Refund Request received when Refund Request raised fails", async () => {
+    addAdmin("Ada");
+    const id = raise(student.id);
+    const { transport, triggers } = recordingTransport();
+    const flaky: NotificationTransport = {
+      ...transport,
+      async trigger(workflow, trigger) {
+        if (workflow === "refund-request-raised")
+          throw new Error("Knock is down");
+        await transport.trigger(workflow, trigger);
+      },
+    };
+
+    await notifyRefundRequestRaised(db, id, flaky);
+
+    expect(triggers.map((t) => t.workflowKey)).toEqual([
+      "refund-request-received",
+    ]);
+  });
+
+  it("does not throw when the transport fails", async () => {
+    addAdmin("Ada");
+    const id = raise(student.id);
+    await expect(
+      notifyRefundRequestRaised(db, id, failing)
+    ).resolves.toBeUndefined();
   });
 });
 

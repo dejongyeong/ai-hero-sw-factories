@@ -46,6 +46,50 @@ describe("describeNotification", () => {
     expect(describeNotification("refund-decided", {})).toBeNull();
   });
 
+  it("describes Refund Request raised under Refunds, linking to the card", () => {
+    expect(
+      describeNotification("refund-request-raised", {
+        refund_request_id: 4,
+        actor_name: "Liam",
+        course_title: "Introduction to TypeScript",
+        amount: "$79.00",
+        url: "/admin/refund-requests?status=open#refund-request-4",
+      })
+    ).toEqual({
+      sentence: [
+        { text: "Liam", bold: true },
+        { text: " requested a refund for ", bold: false },
+        { text: "Introduction to TypeScript", bold: true },
+        { text: " ($79.00)", bold: false },
+      ],
+      href: "/admin/refund-requests?status=open#refund-request-4",
+      category: "Refunds",
+    });
+  });
+
+  it("describes Refund Request received under Refunds, linking to the course", () => {
+    expect(
+      describeNotification("refund-request-received", {
+        refund_request_id: 4,
+        course_title: "Introduction to TypeScript",
+        url: "/courses/intro-ts",
+      })
+    ).toEqual({
+      sentence: [
+        { text: "We've got your refund request for ", bold: false },
+        { text: "Introduction to TypeScript", bold: true },
+      ],
+      href: "/courses/intro-ts",
+      category: "Refunds",
+    });
+  });
+
+  it("returns null for a Refund Request raised it can't read", () => {
+    expect(
+      describeNotification("refund-request-raised", { actor_name: "Liam" })
+    ).toBeNull();
+  });
+
   const newQuestion = {
     comment_id: 9,
     lesson_id: 3,

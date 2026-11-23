@@ -9,6 +9,8 @@ import { z } from "zod";
 export const NotificationWorkflow = {
   CommentReply: "comment-reply",
   NewQuestion: "new-question",
+  RefundRequestRaised: "refund-request-raised",
+  RefundRequestReceived: "refund-request-received",
 } as const;
 
 export type NotificationWorkflow =
@@ -29,7 +31,7 @@ export type SentencePart = { text: string; bold: boolean };
  * The Feed category a Notification is filed under, as shown on its row. Each
  * new workflow adds its category here.
  */
-export type FeedCategory = "Discussions";
+export type FeedCategory = "Discussions" | "Refunds";
 
 export type DescribedNotification = {
   sentence: SentencePart[];
@@ -70,6 +72,16 @@ const commentNotificationData = z.object({
   url: z.string().startsWith("/"),
 });
 
+/**
+ * What every Notification about a Refund Request carries: the Refund Request,
+ * its course, and where the Notification links to.
+ */
+const refundRequestNotificationData = z.object({
+  refund_request_id: z.number().int(),
+  course_title: z.string(),
+  url: z.string().startsWith("/"),
+});
+
 const workflows = {
   [NotificationWorkflow.CommentReply]: workflow(
     commentNotificationData,
@@ -106,6 +118,34 @@ const workflows = {
         category: "Discussions",
       };
     }
+  ),
+  [NotificationWorkflow.RefundRequestRaised]: workflow(
+    refundRequestNotificationData.extend({
+      actor_name: z.string(),
+      // Already formatted, such as "$79.00", so a Knock template can show it.
+      amount: z.string(),
+    }),
+    (data) => ({
+      sentence: [
+        { text: data.actor_name, bold: true },
+        { text: " requested a refund for ", bold: false },
+        { text: data.course_title, bold: true },
+        { text: ` (${data.amount})`, bold: false },
+      ],
+      href: data.url,
+      category: "Refunds",
+    })
+  ),
+  [NotificationWorkflow.RefundRequestReceived]: workflow(
+    refundRequestNotificationData,
+    (data) => ({
+      sentence: [
+        { text: "We've got your refund request for ", bold: false },
+        { text: data.course_title, bold: true },
+      ],
+      href: data.url,
+      category: "Refunds",
+    })
   ),
 } satisfies Record<NotificationWorkflow, unknown>;
 

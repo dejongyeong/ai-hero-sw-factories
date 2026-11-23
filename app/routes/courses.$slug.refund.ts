@@ -12,6 +12,7 @@ import {
   raiseRefundRequest,
 } from "~/lib/refunds.server";
 import { sendEmail } from "~/lib/mailer.server";
+import { notifyRefundRequestRaised } from "~/lib/notify.server";
 
 const refundParamsSchema = z.object({
   slug: z.string().min(1),
@@ -82,6 +83,9 @@ export async function action({ params, request }: Route.ActionArgs) {
   } catch (error) {
     console.error("Could not send the refund request confirmation:", error);
   }
+
+  // Refund Request raised and received, in the Feed. Never throws.
+  await notifyRefundRequestRaised(db, raised.refundRequestId);
 
   // A Student follows an Individual Purchase's Refund Request from Settings; a
   // Team Admin follows a Team Licence's from the team page.

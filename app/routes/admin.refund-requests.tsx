@@ -21,6 +21,7 @@ import {
   getRefundProgress,
 } from "~/lib/refunds.server";
 import { sendEmail } from "~/lib/mailer.server";
+import { refundRequestAnchor } from "~/lib/refund-request-links";
 import { db } from "~/db";
 import {
   coupons,
@@ -395,8 +396,10 @@ function DecisionButtons({ row }: { row: Row }) {
 }
 
 function RefundRequestCard({ row }: { row: Row }) {
+  // The id lets a Refund Request raised Notification scroll to and highlight
+  // this card (HighlightAnchor).
   return (
-    <Card>
+    <Card id={refundRequestAnchor(row.id)} className="scroll-mt-6">
       <CardContent className="space-y-4 p-5">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
