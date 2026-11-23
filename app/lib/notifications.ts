@@ -14,7 +14,7 @@ export const NotificationWorkflow = {
   RefundRequestApproved: "refund-request-approved",
   RefundRequestDeclined: "refund-request-declined",
   RefundIssued: "refund-issued",
-  // Refund Failed is one Notification sent as two workflows, one per
+  // Refund failed is one Notification sent as two workflows, one per
   // recipient, so neither Knock template needs a branch on who reads it.
   RefundFailed: "refund-failed",
   RefundFailedAdmin: "refund-failed-admin",

@@ -942,7 +942,7 @@ describe("decideRefundRequest: Refund Request approved and declined", () => {
   });
 });
 
-describe("Refund Issued and Refund Failed", () => {
+describe("Refund issued and Refund failed", () => {
   let admin: typeof schema.users.$inferSelect;
 
   beforeEach(() => {
@@ -1019,7 +1019,7 @@ describe("Refund Issued and Refund Failed", () => {
   }
 
   describe("notifyRefundIssued", () => {
-    it("sends Refund Issued to the Student, with the amount and the course", async () => {
+    it("sends Refund issued to the Student, with the amount and the course", async () => {
       const { refundId } = await refundFor(student.id, 7900);
       settle(refundId, RefundStatus.Issued);
       const { transport, triggers } = recordingTransport();
@@ -1046,7 +1046,7 @@ describe("Refund Issued and Refund Failed", () => {
       ]);
     });
 
-    it("sends a Team Licence's Refund Issued to its Team Admin", async () => {
+    it("sends a Team Licence's Refund issued to its Team Admin", async () => {
       const teamAdmin = addTeamAdmin();
       const { refundId } = await refundFor(teamAdmin.id, 7900 * 3);
       settle(refundId, RefundStatus.Issued);
@@ -1190,6 +1190,22 @@ describe("Refund Issued and Refund Failed", () => {
       expect(triggers.map((t) => t.workflowKey)).toEqual([
         "refund-failed-admin",
       ]);
+    });
+
+    it("still tells the Student, and no Platform Admin, when there are none", async () => {
+      const { refundId } = await refundFor(student.id);
+      settle(refundId, RefundStatus.Failed);
+      db.update(schema.users)
+        .set({ role: UserRole.Student })
+        .where(eq(schema.users.id, admin.id))
+        .run();
+      const { transport, triggers } = recordingTransport();
+
+      await notifyRefundFailed(db, refundId, transport);
+
+      expect(
+        triggers.map((t) => [t.workflowKey, t.recipients.map((r) => r.id)])
+      ).toEqual([["refund-failed", [`cadence-${student.id}`]]]);
     });
 
     it("sends nothing for a Refund that isn't Failed", async () => {

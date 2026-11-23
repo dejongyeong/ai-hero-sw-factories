@@ -462,12 +462,17 @@ function refundRequestCourseData(request: RefundRequestForNotification) {
   };
 }
 
-/** Every Platform Admin except the given user. */
-function getOtherPlatformAdmins(db: Db, userId: number) {
+/** Every Platform Admin, leaving out `exceptUserId` when it is given. */
+function getPlatformAdmins(db: Db, exceptUserId?: number) {
   return db
     .select()
     .from(users)
-    .where(and(eq(users.role, UserRole.Admin), ne(users.id, userId)))
+    .where(
+      and(
+        eq(users.role, UserRole.Admin),
+        exceptUserId === undefined ? undefined : ne(users.id, exceptUserId)
+      )
+    )
     .orderBy(users.id)
     .all();
 }
@@ -491,7 +496,7 @@ export async function notifyRefundRequestRaised(
     if (!request || !raiser) return;
 
     await deliver(NotificationWorkflow.RefundRequestRaised, async () => {
-      const admins = getOtherPlatformAdmins(db, raiser.id);
+      const admins = getPlatformAdmins(db, raiser.id);
       if (admins.length === 0) return;
 
       await transport.trigger(NotificationWorkflow.RefundRequestRaised, {
@@ -598,8 +603,39 @@ function getRefundForNotification(db: Db, refundId: number) {
     .get();
 }
 
+type RefundForNotification = NonNullable<
+  ReturnType<typeof getRefundForNotification>
+>;
+
 /**
- * Called once a Refund has moved to Issued: Refund Issued tells the Student
+ * A Refund in the given status and the Student it goes back to, or null when
+ * either is missing or the Refund is in another status, so nothing is sent.
+ */
+function getRefundInStatus(
+  db: Db,
+  refundId: number,
+  status: RefundStatus.Issued | RefundStatus.Failed
+) {
+  const refund = getRefundForNotification(db, refundId);
+  const student = refund && getUser(db, refund.studentId);
+  if (!refund || !student || refund.status !== status) return null;
+  return { refund, student };
+}
+
+/**
+ * The trigger data a Notification to the Student a Refund goes back to
+ * carries: which Refund, and a link to its course.
+ */
+function refundCourseData(refund: RefundForNotification) {
+  return {
+    refund_id: refund.id,
+    course_title: refund.courseTitle,
+    url: courseHref(refund.courseSlug),
+  };
+}
+
+/**
+ * Called once a Refund has moved to Issued: Refund issued tells the Student
  * their money has been sent. A Refund that isn't Issued sends nothing. Always
  * sent: its Knock workflow can't be switched off. Nothing in Cadence moves a
  * Refund to Issued yet, so nothing calls this yet.
@@ -610,18 +646,15 @@ export async function notifyRefundIssued(
   transport: NotificationTransport = defaultTransport()
 ): Promise<void> {
   try {
-    const refund = getRefundForNotification(db, refundId);
-    const student = refund && getUser(db, refund.studentId);
-    if (!refund || !student) return;
-    if (refund.status !== RefundStatus.Issued) return;
+    const found = getRefundInStatus(db, refundId, RefundStatus.Issued);
+    if (!found) return;
+    const { refund, student } = found;
 
     await transport.trigger(NotificationWorkflow.RefundIssued, {
       recipients: [personFor(student)],
       data: {
-        refund_id: refund.id,
-        course_title: refund.courseTitle,
+        ...refundCourseData(refund),
         amount: formatPrice(refund.amount),
-        url: courseHref(refund.courseSlug),
       },
     });
   } catch (error) {
@@ -629,18 +662,8 @@ export async function notifyRefundIssued(
   }
 }
 
-/** Every Platform Admin. */
-function getPlatformAdmins(db: Db) {
-  return db
-    .select()
-    .from(users)
-    .where(eq(users.role, UserRole.Admin))
-    .orderBy(users.id)
-    .all();
-}
-
 /**
- * Called once a Refund has moved to Failed: Refund Failed tells the Student
+ * Called once a Refund has moved to Failed: Refund failed tells the Student
  * Cadence is on it, and tells every Platform Admin so they can fix the
  * payment, linking to its Refund Request on the admin queue. Each copy is sent
  * on its own, so one failing doesn't stop the other. A Refund that isn't
@@ -654,19 +677,14 @@ export async function notifyRefundFailed(
   transport: NotificationTransport = defaultTransport()
 ): Promise<void> {
   try {
-    const refund = getRefundForNotification(db, refundId);
-    const student = refund && getUser(db, refund.studentId);
-    if (!refund || !student) return;
-    if (refund.status !== RefundStatus.Failed) return;
+    const found = getRefundInStatus(db, refundId, RefundStatus.Failed);
+    if (!found) return;
+    const { refund, student } = found;
 
     await deliver(NotificationWorkflow.RefundFailed, async () => {
       await transport.trigger(NotificationWorkflow.RefundFailed, {
         recipients: [personFor(student)],
-        data: {
-          refund_id: refund.id,
-          course_title: refund.courseTitle,
-          url: courseHref(refund.courseSlug),
-        },
+        data: refundCourseData(refund),
       });
     });
 

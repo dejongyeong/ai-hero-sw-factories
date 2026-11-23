@@ -199,11 +199,11 @@ finish() {
 # ──────────────────────────────────────────────────────────────────────────
 
 
-# Wizard for "Refund Issued and Refund Failed Notifications (no caller yet)"
+# Wizard for "Refund issued and Refund failed Notifications (no caller yet)"
 # (dejongyeong/ai-hero-sw-factories#29). Creates and commits the
 # refund-issued, refund-failed and refund-failed-admin workflows in Knock's
 # Development environment, then confirms Knock can find all three.
-# Refund Failed is one Notification sent as two workflows: refund-failed for
+# Refund failed is one Notification sent as two workflows: refund-failed for
 # the Student, refund-failed-admin for every Platform Admin.
 # Assumes the Knock keys are already in .env (scripts/knock-setup.sh).
 
@@ -278,7 +278,7 @@ run_wizard() {
 
 TOTAL_STAGES=6
 
-banner "Knock: set up the Refund Issued and Refund Failed workflows"
+banner "Knock: set up the Refund issued and Refund failed workflows"
 
 missing=()
 for k in "${REQUIRED_KEYS[@]}"; do _existing "$k" >/dev/null || missing+=("$k"); done
@@ -288,33 +288,33 @@ if (( ${#missing[@]} )); then
   exit 1
 fi
 
-stage "Create the Refund Issued workflow"
+stage "Create the Refund issued workflow"
 open_url "https://dashboard.knock.app"
 step "Environment switcher (top left): make sure you're in ${BOLD}Development${RESET}."
-create_workflow "Refund Issued" "$ISSUED_KEY"
+create_workflow "Refund issued" "$ISSUED_KEY"
 
-stage "Add Refund Issued's in-app Feed step, and commit"
+stage "Add Refund issued's in-app Feed step, and commit"
 add_feed_step "Your {{ data.amount }} refund for **{{ data.course_title }}** has been sent" \
   "data.url is the course page, /courses/<slug>; vars.app_url supplies the host."
 say "Checking Knock can find it (sandbox run, nothing is sent)…"
 confirm_workflow "$ISSUED_KEY" "$ISSUED_DATA"
 pause
 
-stage "Create the Refund Failed workflow (the Student's copy)"
-create_workflow "Refund Failed" "$FAILED_KEY"
+stage "Create the Refund failed workflow (the Student's copy)"
+create_workflow "Refund failed" "$FAILED_KEY"
 
-stage "Add Refund Failed's in-app Feed step, and commit"
+stage "Add Refund failed's in-app Feed step, and commit"
 add_feed_step "We couldn't send your refund for **{{ data.course_title }}**; we're on it" \
   "data.url is the course page, /courses/<slug>."
 say "Checking Knock can find it (sandbox run, nothing is sent)…"
 confirm_workflow "$FAILED_KEY" "$FAILED_DATA"
 pause
 
-stage "Create the Refund Failed (admin) workflow"
-note "The Platform Admins' copy of Refund Failed: a workflow of its own, so neither template branches on its reader."
-create_workflow "Refund Failed (admin)" "$FAILED_ADMIN_KEY"
+stage "Create the Refund failed (admin) workflow"
+note "The Platform Admins' copy of Refund failed: a workflow of its own, so neither template branches on its reader."
+create_workflow "Refund failed (admin)" "$FAILED_ADMIN_KEY"
 
-stage "Add Refund Failed (admin)'s in-app Feed step, and commit"
+stage "Add Refund failed (admin)'s in-app Feed step, and commit"
 add_feed_step "Refund for **{{ data.student_name }}** on **{{ data.course_title }}** failed" \
   "data.url is /admin/refund-requests?request=<id>; the queue redirects it to the Refund Request's card."
 say "Checking Knock can find all three workflows (sandbox runs, nothing is sent)…"
