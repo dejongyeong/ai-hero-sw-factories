@@ -242,4 +242,4 @@ describe("locateRefundRequest", () => {
   it("finds nothing for a Refund Request that doesn't exist", () => {
     expect(locateRefundRequest(db, 999)).toBeNull();
   });
-});
+});

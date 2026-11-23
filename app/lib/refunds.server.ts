@@ -395,4 +395,4 @@ export function locateRefundRequest(
     .get();
 
   return found ? refundRequestQueueHref(refundRequestId, found.status) : null;
-}
+}
