@@ -461,7 +461,7 @@ export default function InstructorStudentRoster({
                     return (
                       <tr
                         key={student.userId}
-                        // New Purchase links here (HighlightAnchor).
+                        // New purchase links here (HighlightAnchor).
                         id={`student-${student.userId}`}
                         className="border-b border-border last:border-0"
                       >

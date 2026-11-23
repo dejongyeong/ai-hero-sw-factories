@@ -710,7 +710,7 @@ export async function notifyRefundFailed(
 }
 
 /**
- * Called once a Purchase is saved: New Purchase tells the course's owning
+ * Called once a Purchase is saved: New purchase tells the course's owning
  * Instructor. Never a Platform Admin, and never the buyer.
  */
 export async function notifyNewPurchase(

@@ -1241,7 +1241,7 @@ describe("notifyNewPurchase", () => {
       .get();
   }
 
-  it("sends New Purchase for an Individual Purchase to the course's owning Instructor", async () => {
+  it("sends New purchase for an Individual Purchase to the course's owning Instructor", async () => {
     const purchase = buy(student.id);
     const { transport, triggers } = recordingTransport();
 
@@ -1279,7 +1279,7 @@ describe("notifyNewPurchase", () => {
     });
   });
 
-  it("sends New Purchase for a Team Licence with its seat count", async () => {
+  it("sends New purchase for a Team Licence with its seat count", async () => {
     const team = db.insert(schema.teams).values({}).returning().get();
     const purchase = buy(student.id);
     for (const code of ["A", "B", "C"]) {
@@ -1309,7 +1309,7 @@ describe("notifyNewPurchase", () => {
     expect(triggers).toEqual([]);
   });
 
-  it("never sends New Purchase to a Platform Admin who owns the course", async () => {
+  it("never sends New purchase to a Platform Admin who owns the course", async () => {
     db.update(schema.users)
       .set({ role: UserRole.Admin })
       .where(eq(schema.users.id, instructor.id))

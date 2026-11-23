@@ -268,7 +268,7 @@ describe("describeNotification", () => {
     ]);
   });
 
-  it("describes a batch of New Purchases by their count", () => {
+  it("describes a batch of New purchases by their count", () => {
     expect(
       describeNotification("new-purchase", newPurchase, 3)?.sentence
     ).toEqual([
