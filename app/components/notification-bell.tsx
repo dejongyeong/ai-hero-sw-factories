@@ -134,7 +134,9 @@ function LiveBell() {
 
   return (
     <BellPopover unreadCount={unreadCount}>
-      {(close) => <LivePanel load={load} settings={settings} onClose={close} />}
+      {(close) => (
+        <LivePanel load={load} settings={settings} onClose={close} />
+      )}
     </BellPopover>
   );
 }
