@@ -1,10 +1,9 @@
 import { Knock } from "@knocklabs/node";
-import { and, count, eq, ne } from "drizzle-orm";
+import { and, eq, ne } from "drizzle-orm";
 import type { Db } from "~/db";
 import {
   RefundRequestStatus,
   UserRole,
-  coupons,
   courses,
   lessons,
   modules,
@@ -20,6 +19,7 @@ import { writeToOutbox } from "~/lib/outbox.server";
 import { commentHref } from "~/lib/comment-links";
 import { courseHref } from "~/lib/course-links";
 import { refundRequestHref } from "~/lib/refund-request-links";
+import { studentHref, studentRosterHref } from "~/lib/student-roster-links";
 import { formatPrice } from "~/lib/utils";
 import {
   NotificationWorkflow,
@@ -711,14 +711,16 @@ export async function notifyRefundFailed(
 
 /**
  * Called once a Purchase is saved: New purchase tells the course's owning
- * Instructor. Never a Platform Admin, and never the buyer.
+ * Instructor. Never a Platform Admin, and never the buyer. `seatCount` is
+ * how many Seats a Team Licence bought; null for an Individual Purchase.
  */
 export async function notifyNewPurchase(
   db: Db,
   purchaseId: number,
+  seatCount: number | null,
   transport: NotificationTransport = defaultTransport()
 ): Promise<void> {
-  try {
+  await deliver(NotificationWorkflow.NewPurchase, async () => {
     const purchase = db
       .select({
         id: purchases.id,
@@ -739,14 +741,6 @@ export async function notifyNewPurchase(
       return;
     }
 
-    // A Team Licence is a Purchase with Seats; an Individual Purchase has none.
-    const seats = db
-      .select({ count: count() })
-      .from(coupons)
-      .where(eq(coupons.purchaseId, purchase.id))
-      .get();
-    const seatCount = seats && seats.count > 0 ? seats.count : null;
-
     await transport.trigger(NotificationWorkflow.NewPurchase, {
       recipients: [personFor(instructor)],
       actor: personFor(buyer),
@@ -756,10 +750,12 @@ export async function notifyNewPurchase(
         actor_name: buyer.name,
         course_title: purchase.courseTitle,
         seat_count: seatCount,
-        url: `/instructor/${purchase.courseId}/students#student-${buyer.id}`,
+        // A Team Licence's buyer is not enrolled, so has no roster row.
+        url:
+          seatCount === null
+            ? studentHref(purchase.courseId, buyer.id)
+            : studentRosterHref(purchase.courseId),
       },
     });
-  } catch (error) {
-    console.error(`Notification for Purchase ${purchaseId} failed`, error);
-  }
+  });
 }

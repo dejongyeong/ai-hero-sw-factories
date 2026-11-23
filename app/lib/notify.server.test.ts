@@ -1245,7 +1245,7 @@ describe("notifyNewPurchase", () => {
     const purchase = buy(student.id);
     const { transport, triggers } = recordingTransport();
 
-    await notifyNewPurchase(db, purchase.id, transport);
+    await notifyNewPurchase(db, purchase.id, null, transport);
 
     expect(triggers).toHaveLength(1);
     expect(triggers[0].workflowKey).toBe("new-purchase");
@@ -1262,7 +1262,7 @@ describe("notifyNewPurchase", () => {
     const purchase = buy(student.id);
     const { transport, triggers } = recordingTransport();
 
-    await notifyNewPurchase(db, purchase.id, transport);
+    await notifyNewPurchase(db, purchase.id, null, transport);
 
     expect(triggers[0].actor).toEqual({
       id: `cadence-${student.id}`,
@@ -1279,24 +1279,20 @@ describe("notifyNewPurchase", () => {
     });
   });
 
-  it("sends New purchase for a Team Licence with its seat count", async () => {
-    const team = db.insert(schema.teams).values({}).returning().get();
+  it("sends New purchase for a Team Licence with its purchased Seats, linking to the bare roster", async () => {
     const purchase = buy(student.id);
-    for (const code of ["A", "B", "C"]) {
-      db.insert(schema.coupons)
-        .values({ teamId: team.id, courseId, code, purchaseId: purchase.id })
-        .run();
-    }
     const { transport, triggers } = recordingTransport();
 
-    await notifyNewPurchase(db, purchase.id, transport);
+    // The buyer of a Team Licence is not enrolled, so has no roster row.
+    await notifyNewPurchase(db, purchase.id, 5, transport);
 
     expect(triggers.map((t) => t.recipients.map((r) => r.id))).toEqual([
       [`cadence-${instructor.id}`],
     ]);
     expect(triggers[0].data).toMatchObject({
       course_id: courseId,
-      seat_count: 3,
+      seat_count: 5,
+      url: `/instructor/${courseId}/students`,
     });
   });
 
@@ -1304,7 +1300,7 @@ describe("notifyNewPurchase", () => {
     const purchase = buy(instructor.id);
     const { transport, triggers } = recordingTransport();
 
-    await notifyNewPurchase(db, purchase.id, transport);
+    await notifyNewPurchase(db, purchase.id, null, transport);
 
     expect(triggers).toEqual([]);
   });
@@ -1317,7 +1313,7 @@ describe("notifyNewPurchase", () => {
     const purchase = buy(student.id);
     const { transport, triggers } = recordingTransport();
 
-    await notifyNewPurchase(db, purchase.id, transport);
+    await notifyNewPurchase(db, purchase.id, null, transport);
 
     expect(triggers).toEqual([]);
   });
@@ -1326,7 +1322,7 @@ describe("notifyNewPurchase", () => {
     const purchase = buy(student.id);
 
     await expect(
-      notifyNewPurchase(db, purchase.id, failing)
+      notifyNewPurchase(db, purchase.id, null, failing)
     ).resolves.toBeUndefined();
   });
 });

@@ -1,6 +1,7 @@
 import { Link } from "react-router";
 import type { Route } from "./+types/instructor.$courseId.students";
 import { getCurrentUserId } from "~/lib/session";
+import { studentAnchor } from "~/lib/student-roster-links";
 import { UserRole } from "~/db/schema";
 import { Card, CardContent } from "~/components/ui/card";
 import { Button } from "~/components/ui/button";
@@ -50,7 +51,10 @@ function getCourseEnrolledStudents(courseId: number) {
  * Individual Purchase of this course was approved. Only the latest one per
  * Student, and not anyone who has since bought the course again.
  */
-function getCourseLapsedStudents(courseId: number, enrolledUserIds: Set<number>) {
+function getCourseLapsedStudents(
+  courseId: number,
+  enrolledUserIds: Set<number>
+) {
   const rows = db
     .select({
       userId: purchases.userId,
@@ -462,8 +466,8 @@ export default function InstructorStudentRoster({
                       <tr
                         key={student.userId}
                         // New purchase links here (HighlightAnchor).
-                        id={`student-${student.userId}`}
-                        className="border-b border-border last:border-0"
+                        id={studentAnchor(student.userId)}
+                        className="scroll-mt-6 border-b border-border last:border-0"
                       >
                         <td className="px-4 py-3">
                           <div>

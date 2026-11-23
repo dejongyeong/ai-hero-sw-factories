@@ -375,7 +375,7 @@ export async function action({ params, request }: Route.ActionArgs) {
       country
     );
     enrollUser(currentUserId, course.id, false, false);
-    await notifyNewPurchase(db, purchase.id);
+    await notifyNewPurchase(db, purchase.id, null);
     throw redirect(`/courses/${slug}/welcome`);
   }
 
@@ -389,7 +389,7 @@ export async function action({ params, request }: Route.ActionArgs) {
     country,
     quantity
   );
-  await notifyNewPurchase(db, purchase.id);
+  await notifyNewPurchase(db, purchase.id, quantity);
   throw redirect(`/team`);
 }
 
