@@ -2,6 +2,7 @@ import { Knock } from "@knocklabs/node";
 import { and, eq, ne } from "drizzle-orm";
 import type { Db } from "~/db";
 import {
+  RefundRequestStatus,
   UserRole,
   courses,
   lessons,
@@ -430,6 +431,7 @@ function getRefundRequestForNotification(db: Db, refundRequestId: number) {
   return db
     .select({
       id: refundRequests.id,
+      status: refundRequests.status,
       amountPaid: purchases.amountPaid,
       raiserId: purchases.userId,
       courseTitle: courses.title,
@@ -501,6 +503,49 @@ export async function notifyRefundRequestRaised(
   } catch (error) {
     console.error(
       `Notifications for Refund Request ${refundRequestId} failed`,
+      error
+    );
+  }
+}
+
+/**
+ * Called once a Platform Admin's decision on a Refund Request has committed:
+ * Refund Request approved or declined tells the person who raised it, which
+ * for a Team Licence is its Team Admin. A Refund Request still Open sends
+ * nothing. Always sent: neither Knock workflow can be switched off. The
+ * decision email still goes out through the mailer, not here.
+ */
+export async function notifyRefundRequestDecided(
+  db: Db,
+  refundRequestId: number,
+  transport: NotificationTransport = defaultTransport()
+): Promise<void> {
+  try {
+    const request = getRefundRequestForNotification(db, refundRequestId);
+    const raiser = request && getUser(db, request.raiserId);
+    if (!request || !raiser) return;
+
+    const common = {
+      refund_request_id: request.id,
+      course_title: request.courseTitle,
+      url: courseHref(request.courseSlug),
+    };
+
+    if (request.status === RefundRequestStatus.Approved) {
+      await transport.trigger(NotificationWorkflow.RefundRequestApproved, {
+        recipients: [personFor(raiser)],
+        // A Refund is always the full amount paid.
+        data: { ...common, amount: formatPrice(request.amountPaid) },
+      });
+    } else if (request.status === RefundRequestStatus.Declined) {
+      await transport.trigger(NotificationWorkflow.RefundRequestDeclined, {
+        recipients: [personFor(raiser)],
+        data: common,
+      });
+    }
+  } catch (error) {
+    console.error(
+      `Notification for the decision on Refund Request ${refundRequestId} failed`,
       error
     );
   }

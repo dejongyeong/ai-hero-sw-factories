@@ -4,7 +4,12 @@ import { join } from "node:path";
 import { eq } from "drizzle-orm";
 import { beforeEach, describe, expect, it } from "vitest";
 import * as schema from "~/db/schema";
-import { CourseStatus, UserRole } from "~/db/schema";
+import {
+  CourseStatus,
+  RefundRequestStatus,
+  TeamMemberRole,
+  UserRole,
+} from "~/db/schema";
 import type { Db } from "~/db";
 import { createTestDb } from "~/test/setup";
 import { postComment } from "./comments.server";
@@ -14,6 +19,7 @@ import {
   archiveCommentNotifications,
   knockTransport,
   notifyCommentPosted,
+  notifyRefundRequestDecided,
   notifyRefundRequestRaised,
   outboxTransport,
   type DeletedComment,
@@ -638,6 +644,154 @@ describe("notifyRefundRequestRaised", () => {
     const id = raise(student.id);
     await expect(
       notifyRefundRequestRaised(db, id, failing)
+    ).resolves.toBeUndefined();
+  });
+});
+
+describe("notifyRefundRequestDecided", () => {
+  function raise(buyerId: number, amountPaid = 7900) {
+    const purchase = db
+      .insert(schema.purchases)
+      .values({ userId: buyerId, courseId, amountPaid })
+      .returning()
+      .get();
+    const raised = raiseRefundRequest(
+      db,
+      purchase.id,
+      buyerId,
+      "It wasn't what I expected.",
+      new Date()
+    );
+    if (!raised.ok) throw new Error(raised.error);
+    return { refundRequestId: raised.refundRequestId, purchaseId: purchase.id };
+  }
+
+  /** Records a decision the way the admin queue's transaction does. */
+  function decide(
+    refundRequestId: number,
+    status: RefundRequestStatus.Approved | RefundRequestStatus.Declined
+  ) {
+    db.update(schema.refundRequests)
+      .set({ status, decidedAt: new Date().toISOString() })
+      .where(eq(schema.refundRequests.id, refundRequestId))
+      .run();
+  }
+
+  it("sends Refund Request approved to the person who raised it", async () => {
+    const { refundRequestId } = raise(student.id, 7900);
+    decide(refundRequestId, RefundRequestStatus.Approved);
+    const { transport, triggers } = recordingTransport();
+
+    await notifyRefundRequestDecided(db, refundRequestId, transport);
+
+    expect(triggers).toEqual([
+      {
+        workflowKey: "refund-request-approved",
+        recipients: [
+          {
+            id: `cadence-${student.id}`,
+            name: "Liam",
+            email: "liam@example.com",
+          },
+        ],
+        data: {
+          refund_request_id: refundRequestId,
+          course_title: "Introduction to TypeScript",
+          amount: "$79.00",
+          url: "/courses/intro-ts",
+        },
+      },
+    ]);
+  });
+
+  it("sends Refund Request declined to the person who raised it", async () => {
+    const { refundRequestId } = raise(student.id);
+    decide(refundRequestId, RefundRequestStatus.Declined);
+    const { transport, triggers } = recordingTransport();
+
+    await notifyRefundRequestDecided(db, refundRequestId, transport);
+
+    expect(triggers).toEqual([
+      {
+        workflowKey: "refund-request-declined",
+        recipients: [
+          {
+            id: `cadence-${student.id}`,
+            name: "Liam",
+            email: "liam@example.com",
+          },
+        ],
+        data: {
+          refund_request_id: refundRequestId,
+          course_title: "Introduction to TypeScript",
+          url: "/courses/intro-ts",
+        },
+      },
+    ]);
+  });
+
+  it("sends a Team Licence's decision to its Team Admin, not its Seat holders", async () => {
+    const teamAdmin = db
+      .insert(schema.users)
+      .values({
+        name: "Tara",
+        email: "tara@example.com",
+        role: UserRole.Student,
+      })
+      .returning()
+      .get();
+    const team = db.insert(schema.teams).values({}).returning().get();
+    db.insert(schema.teamMembers)
+      .values({
+        teamId: team.id,
+        userId: teamAdmin.id,
+        role: TeamMemberRole.Admin,
+      })
+      .run();
+    const { refundRequestId, purchaseId } = raise(teamAdmin.id, 7900 * 3);
+    db.insert(schema.coupons)
+      .values([
+        { teamId: team.id, courseId, code: "SEAT-1", purchaseId },
+        { teamId: team.id, courseId, code: "SEAT-2", purchaseId },
+      ])
+      .run();
+    decide(refundRequestId, RefundRequestStatus.Approved);
+    const { transport, triggers } = recordingTransport();
+
+    await notifyRefundRequestDecided(db, refundRequestId, transport);
+
+    expect(triggers.map((t) => [t.workflowKey, t.recipients])).toEqual([
+      [
+        "refund-request-approved",
+        [
+          {
+            id: `cadence-${teamAdmin.id}`,
+            name: "Tara",
+            email: "tara@example.com",
+          },
+        ],
+      ],
+    ]);
+    expect(triggers[0].data).toMatchObject({ amount: "$237.00" });
+  });
+
+  it("sends nothing for a Refund Request that is still Open", async () => {
+    // A refused decision (the Platform Admin's own request, or a Team Licence
+    // with a Claimed Seat) leaves the Refund Request Open.
+    const { refundRequestId } = raise(student.id);
+    const { transport, triggers } = recordingTransport();
+
+    await notifyRefundRequestDecided(db, refundRequestId, transport);
+
+    expect(triggers).toEqual([]);
+  });
+
+  it("does not throw when the transport fails", async () => {
+    const { refundRequestId } = raise(student.id);
+    decide(refundRequestId, RefundRequestStatus.Approved);
+
+    await expect(
+      notifyRefundRequestDecided(db, refundRequestId, failing)
     ).resolves.toBeUndefined();
   });
 });
