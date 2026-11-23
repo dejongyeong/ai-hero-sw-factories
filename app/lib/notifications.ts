@@ -261,7 +261,7 @@ const workflows = {
                 text:
                   data.seat_count === null
                     ? " bought "
-                    : ` bought ${data.seat_count} seats on `,
+                    : ` bought ${data.seat_count} ${data.seat_count === 1 ? "seat" : "seats"} on `,
                 bold: false,
               },
               { text: data.course_title, bold: true },

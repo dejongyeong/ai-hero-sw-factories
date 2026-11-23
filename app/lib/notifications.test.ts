@@ -268,6 +268,17 @@ describe("describeNotification", () => {
     ]);
   });
 
+  it("describes a one-Seat Team Licence in the singular", () => {
+    expect(
+      describeNotification("new-purchase", { ...newPurchase, seat_count: 1 }, 1)
+        ?.sentence
+    ).toEqual([
+      { text: "Liam", bold: true },
+      { text: " bought 1 seat on ", bold: false },
+      { text: "Introduction to TypeScript", bold: true },
+    ]);
+  });
+
   it("describes a batch of New purchases by their count", () => {
     expect(
       describeNotification("new-purchase", newPurchase, 3)?.sentence

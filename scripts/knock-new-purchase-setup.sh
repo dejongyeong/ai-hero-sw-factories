@@ -265,7 +265,7 @@ step "Below the Batch step, add a channel step of type ${BOLD}In-app feed${RESET
 step "Pick the same Feed channel the other workflows use (its id is KNOCK_FEED_CHANNEL_ID in .env)."
 step "Edit its template. Choose the ${BOLD}Standard${RESET} variant (the whole row is the link)."
 step "Markdown body:"
-say  "    ${BOLD}{% if total_activities > 1 %}**{{ total_activities }} new purchases** of **{{ data.course_title }}**{% elsif data.seat_count %}**{{ data.actor_name }}** bought {{ data.seat_count }} seats on **{{ data.course_title }}**{% else %}**{{ data.actor_name }}** bought **{{ data.course_title }}**{% endif %}${RESET}"
+say  "    ${BOLD}{% if total_activities > 1 %}**{{ total_activities }} new purchases** of **{{ data.course_title }}**{% elsif data.seat_count %}**{{ data.actor_name }}** bought {{ data.seat_count }} {% if data.seat_count == 1 %}seat{% else %}seats{% endif %} on **{{ data.course_title }}**{% else %}**{{ data.actor_name }}** bought **{{ data.course_title }}**{% endif %}${RESET}"
 step "Action URL: replace the default with ${BOLD}{{ vars.app_url }}{{ data.url }}${RESET}"
 note "In a batch, data is the latest Purchase's, so the link lands on the newest buyer."
 note "Cadence's bell builds its own sentence, but the step still needs a template."
