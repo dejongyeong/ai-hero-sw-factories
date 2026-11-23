@@ -461,6 +461,8 @@ export default function InstructorStudentRoster({
                     return (
                       <tr
                         key={student.userId}
+                        // New Purchase links here (HighlightAnchor).
+                        id={`student-${student.userId}`}
                         className="border-b border-border last:border-0"
                       >
                         <td className="px-4 py-3">

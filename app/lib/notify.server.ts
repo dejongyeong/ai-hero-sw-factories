@@ -1,9 +1,10 @@
 import { Knock } from "@knocklabs/node";
-import { and, eq, ne } from "drizzle-orm";
+import { and, count, eq, ne } from "drizzle-orm";
 import type { Db } from "~/db";
 import {
   RefundRequestStatus,
   UserRole,
+  coupons,
   courses,
   lessons,
   modules,
@@ -705,5 +706,60 @@ export async function notifyRefundFailed(
     });
   } catch (error) {
     console.error(`Notifications for Refund ${refundId} failed`, error);
+  }
+}
+
+/**
+ * Called once a Purchase is saved: New Purchase tells the course's owning
+ * Instructor. Never a Platform Admin, and never the buyer.
+ */
+export async function notifyNewPurchase(
+  db: Db,
+  purchaseId: number,
+  transport: NotificationTransport = defaultTransport()
+): Promise<void> {
+  try {
+    const purchase = db
+      .select({
+        id: purchases.id,
+        buyerId: purchases.userId,
+        courseId: courses.id,
+        courseTitle: courses.title,
+        instructorId: courses.instructorId,
+      })
+      .from(purchases)
+      .innerJoin(courses, eq(purchases.courseId, courses.id))
+      .where(eq(purchases.id, purchaseId))
+      .get();
+    const buyer = purchase && getUser(db, purchase.buyerId);
+    const instructor = purchase && getUser(db, purchase.instructorId);
+    if (!purchase || !buyer || !instructor) return;
+    // The owning Instructor only: never a Platform Admin, never the buyer.
+    if (instructor.role === UserRole.Admin || instructor.id === buyer.id) {
+      return;
+    }
+
+    // A Team Licence is a Purchase with Seats; an Individual Purchase has none.
+    const seats = db
+      .select({ count: count() })
+      .from(coupons)
+      .where(eq(coupons.purchaseId, purchase.id))
+      .get();
+    const seatCount = seats && seats.count > 0 ? seats.count : null;
+
+    await transport.trigger(NotificationWorkflow.NewPurchase, {
+      recipients: [personFor(instructor)],
+      actor: personFor(buyer),
+      data: {
+        purchase_id: purchase.id,
+        course_id: purchase.courseId,
+        actor_name: buyer.name,
+        course_title: purchase.courseTitle,
+        seat_count: seatCount,
+        url: `/instructor/${purchase.courseId}/students#student-${buyer.id}`,
+      },
+    });
+  } catch (error) {
+    console.error(`Notification for Purchase ${purchaseId} failed`, error);
   }
 }

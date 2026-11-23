@@ -20,6 +20,7 @@ import {
   archiveCommentNotifications,
   knockTransport,
   notifyCommentPosted,
+  notifyNewPurchase,
   notifyRefundFailed,
   notifyRefundIssued,
   notifyRefundRequestDecided,
@@ -1228,6 +1229,105 @@ describe("Refund issued and Refund failed", () => {
         notifyRefundFailed(db, refundId, failing)
       ).resolves.toBeUndefined();
     });
+  });
+});
+
+describe("notifyNewPurchase", () => {
+  function buy(buyerId: number) {
+    return db
+      .insert(schema.purchases)
+      .values({ userId: buyerId, courseId, amountPaid: 7900 })
+      .returning()
+      .get();
+  }
+
+  it("sends New Purchase for an Individual Purchase to the course's owning Instructor", async () => {
+    const purchase = buy(student.id);
+    const { transport, triggers } = recordingTransport();
+
+    await notifyNewPurchase(db, purchase.id, transport);
+
+    expect(triggers).toHaveLength(1);
+    expect(triggers[0].workflowKey).toBe("new-purchase");
+    expect(triggers[0].recipients).toEqual([
+      {
+        id: `cadence-${instructor.id}`,
+        name: "Sarah",
+        email: "sarah@example.com",
+      },
+    ]);
+  });
+
+  it("carries the buyer, the course as its batch key, and a link to the buyer on the roster", async () => {
+    const purchase = buy(student.id);
+    const { transport, triggers } = recordingTransport();
+
+    await notifyNewPurchase(db, purchase.id, transport);
+
+    expect(triggers[0].actor).toEqual({
+      id: `cadence-${student.id}`,
+      name: "Liam",
+      email: "liam@example.com",
+    });
+    expect(triggers[0].data).toEqual({
+      purchase_id: purchase.id,
+      course_id: courseId,
+      actor_name: "Liam",
+      course_title: "Introduction to TypeScript",
+      seat_count: null,
+      url: `/instructor/${courseId}/students#student-${student.id}`,
+    });
+  });
+
+  it("sends New Purchase for a Team Licence with its seat count", async () => {
+    const team = db.insert(schema.teams).values({}).returning().get();
+    const purchase = buy(student.id);
+    for (const code of ["A", "B", "C"]) {
+      db.insert(schema.coupons)
+        .values({ teamId: team.id, courseId, code, purchaseId: purchase.id })
+        .run();
+    }
+    const { transport, triggers } = recordingTransport();
+
+    await notifyNewPurchase(db, purchase.id, transport);
+
+    expect(triggers.map((t) => t.recipients.map((r) => r.id))).toEqual([
+      [`cadence-${instructor.id}`],
+    ]);
+    expect(triggers[0].data).toMatchObject({
+      course_id: courseId,
+      seat_count: 3,
+    });
+  });
+
+  it("sends nothing when the course's Instructor bought it themselves", async () => {
+    const purchase = buy(instructor.id);
+    const { transport, triggers } = recordingTransport();
+
+    await notifyNewPurchase(db, purchase.id, transport);
+
+    expect(triggers).toEqual([]);
+  });
+
+  it("never sends New Purchase to a Platform Admin who owns the course", async () => {
+    db.update(schema.users)
+      .set({ role: UserRole.Admin })
+      .where(eq(schema.users.id, instructor.id))
+      .run();
+    const purchase = buy(student.id);
+    const { transport, triggers } = recordingTransport();
+
+    await notifyNewPurchase(db, purchase.id, transport);
+
+    expect(triggers).toEqual([]);
+  });
+
+  it("does not throw when the transport fails", async () => {
+    const purchase = buy(student.id);
+
+    await expect(
+      notifyNewPurchase(db, purchase.id, failing)
+    ).resolves.toBeUndefined();
   });
 });
 
