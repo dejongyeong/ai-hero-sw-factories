@@ -15,6 +15,7 @@ import {
 } from "~/db/schema";
 import { formatPrice } from "~/lib/utils";
 import type { Email } from "~/lib/mailer.server";
+import { refundRequestQueueHref } from "~/lib/refund-request-links";
 import type { PurchaseKind, RefundProgress } from "~/lib/refund-decisions";
 import {
   REFUND_COMPLETION_LIMIT,
@@ -375,4 +376,23 @@ export function raiseRefundRequest(
       ].join("\n"),
     },
   };
+}
+
+/**
+ * Where a Refund Request's card is on the admin queue now, under its current
+ * status — or null if there is no such Refund Request. A link to a Refund
+ * Request (refundRequestHref) is redirected here, so it still lands on the
+ * card after the request is decided.
+ */
+export function locateRefundRequest(
+  db: Db,
+  refundRequestId: number
+): string | null {
+  const found = db
+    .select({ status: refundRequests.status })
+    .from(refundRequests)
+    .where(eq(refundRequests.id, refundRequestId))
+    .get();
+
+  return found ? refundRequestQueueHref(refundRequestId, found.status) : null;
 }

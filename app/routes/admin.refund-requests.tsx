@@ -1,5 +1,11 @@
 import { useEffect } from "react";
-import { data, isRouteErrorResponse, Link, useFetcher } from "react-router";
+import {
+  data,
+  isRouteErrorResponse,
+  Link,
+  redirect,
+  useFetcher,
+} from "react-router";
 import { toast } from "sonner";
 import { z } from "zod";
 import { and, count, desc, eq, isNotNull, sql } from "drizzle-orm";
@@ -19,8 +25,13 @@ import {
 import {
   getPurchaseKind,
   getRefundProgress,
+  locateRefundRequest,
 } from "~/lib/refunds.server";
 import { sendEmail } from "~/lib/mailer.server";
+import {
+  REFUND_REQUEST_QUEUE_PATH,
+  refundRequestAnchor,
+} from "~/lib/refund-request-links";
 import { db } from "~/db";
 import {
   coupons,
@@ -138,6 +149,16 @@ export function meta() {
 
 export async function loader({ request, url }: Route.LoaderArgs) {
   const platformAdmin = await requirePlatformAdmin(request);
+
+  // A link to one Refund Request (refundRequestHref) opens the queue at its
+  // card, under whatever status it has now.
+  const linkedId = Number(url.searchParams.get("request"));
+  if (Number.isInteger(linkedId) && linkedId > 0) {
+    throw redirect(
+      locateRefundRequest(db, linkedId) ?? REFUND_REQUEST_QUEUE_PATH
+    );
+  }
+
   const status = statusFilterSchema.parse(
     url.searchParams.get("status") ?? undefined
   );
@@ -395,8 +416,10 @@ function DecisionButtons({ row }: { row: Row }) {
 }
 
 function RefundRequestCard({ row }: { row: Row }) {
+  // The id lets a Refund Request raised Notification scroll to and highlight
+  // this card (HighlightAnchor).
   return (
-    <Card>
+    <Card id={refundRequestAnchor(row.id)} className="scroll-mt-6">
       <CardContent className="space-y-4 p-5">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>

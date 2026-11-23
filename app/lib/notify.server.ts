@@ -1,11 +1,22 @@
 import { Knock } from "@knocklabs/node";
-import { eq } from "drizzle-orm";
+import { and, eq, ne } from "drizzle-orm";
 import type { Db } from "~/db";
-import { UserRole, courses, lessons, modules, users } from "~/db/schema";
+import {
+  UserRole,
+  courses,
+  lessons,
+  modules,
+  purchases,
+  refundRequests,
+  users,
+} from "~/db/schema";
 import { knockConfig, knockUserId } from "~/lib/knock.server";
 import { getCommentById } from "~/lib/comments.server";
 import { writeToOutbox } from "~/lib/outbox.server";
 import { commentHref } from "~/lib/comment-links";
+import { courseHref } from "~/lib/course-links";
+import { refundRequestHref } from "~/lib/refund-request-links";
+import { formatPrice } from "~/lib/utils";
 import {
   NotificationWorkflow,
   type NotificationData,
@@ -405,6 +416,91 @@ async function cancelNewQuestion(
   } catch (error) {
     console.error(
       `Cancelling New question for Comment ${question.id} failed`,
+      error
+    );
+  }
+}
+
+/**
+ * What a Refund Request's Notifications say: its amount, its course, and who
+ * raised it. refund_requests has no raised-by column; the Purchase's buyer
+ * is the raiser, because raiseRefundRequest refuses anyone else.
+ */
+function getRefundRequestForNotification(db: Db, refundRequestId: number) {
+  return db
+    .select({
+      id: refundRequests.id,
+      amountPaid: purchases.amountPaid,
+      raiserId: purchases.userId,
+      courseTitle: courses.title,
+      courseSlug: courses.slug,
+    })
+    .from(refundRequests)
+    .innerJoin(purchases, eq(refundRequests.purchaseId, purchases.id))
+    .innerJoin(courses, eq(purchases.courseId, courses.id))
+    .where(eq(refundRequests.id, refundRequestId))
+    .get();
+}
+
+/** Every Platform Admin except the given user. */
+function getOtherPlatformAdmins(db: Db, userId: number) {
+  return db
+    .select()
+    .from(users)
+    .where(and(eq(users.role, UserRole.Admin), ne(users.id, userId)))
+    .orderBy(users.id)
+    .all();
+}
+
+/**
+ * Called when a Refund Request is raised:
+ * - Refund Request raised tells every Platform Admin but the one who raised
+ *   it, who can't decide it (see GLOSSARY.md, Refund Request).
+ * - Refund Request received tells the person who raised it that it arrived.
+ * Each is sent on its own, so one failing doesn't stop the other. The
+ * "Refund requested" email still goes out through the mailer, not here.
+ */
+export async function notifyRefundRequestRaised(
+  db: Db,
+  refundRequestId: number,
+  transport: NotificationTransport = defaultTransport()
+): Promise<void> {
+  try {
+    const request = getRefundRequestForNotification(db, refundRequestId);
+    const raiser = request && getUser(db, request.raiserId);
+    if (!request || !raiser) return;
+
+    await deliver(NotificationWorkflow.RefundRequestRaised, async () => {
+      const admins = getOtherPlatformAdmins(db, raiser.id);
+      if (admins.length === 0) return;
+
+      await transport.trigger(NotificationWorkflow.RefundRequestRaised, {
+        recipients: admins.map(personFor),
+        actor: personFor(raiser),
+        data: {
+          refund_request_id: request.id,
+          actor_name: raiser.name,
+          course_title: request.courseTitle,
+          amount: formatPrice(request.amountPaid),
+          url: refundRequestHref(request.id),
+        },
+      });
+    });
+
+    // Always sent: its Knock workflow is marked so it can't be switched off.
+    await deliver(NotificationWorkflow.RefundRequestReceived, async () => {
+      await transport.trigger(NotificationWorkflow.RefundRequestReceived, {
+        recipients: [personFor(raiser)],
+        data: {
+          refund_request_id: request.id,
+          course_title: request.courseTitle,
+          url: courseHref(request.courseSlug),
+        },
+      });
+    });
+  } catch (error) {
+    console.error(
+      `Notifications for Refund Request ${refundRequestId} failed`,
       error
     );
   }
