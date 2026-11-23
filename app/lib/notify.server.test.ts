@@ -1,6 +1,7 @@
 import { mkdtempSync, readdirSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { eq } from "drizzle-orm";
 import { beforeEach, describe, expect, it } from "vitest";
 import * as schema from "~/db/schema";
 import { CourseStatus, UserRole } from "~/db/schema";
@@ -9,22 +10,100 @@ import { createTestDb } from "~/test/setup";
 import { postComment } from "./comments.server";
 import type { NotificationWorkflow } from "./notifications";
 import {
-  notifyCommentReply,
+  archiveCommentNotifications,
+  knockTransport,
+  notifyCommentPosted,
   outboxTransport,
+  type DeletedComment,
+  type KnockClient,
+  type KnockMessagesApi,
+  type NotificationCancel,
   type NotificationTransport,
   type NotificationTrigger,
 } from "./notify.server";
 
 type Recorded = { workflowKey: NotificationWorkflow } & NotificationTrigger;
 
+/** Records what it is asked to do. */
 function recordingTransport() {
   const triggers: Recorded[] = [];
+  const archived: DeletedComment[] = [];
+  const cancelled: NotificationCancel[] = [];
   const transport: NotificationTransport = {
     async trigger(workflowKey, trigger) {
       triggers.push({ workflowKey, ...trigger });
     },
+    async cancel(request) {
+      cancelled.push(request);
+    },
+    async archiveMessages(comment) {
+      archived.push(comment);
+    },
   };
-  return { transport, triggers };
+  return { transport, triggers, archived, cancelled };
+}
+
+const failing: NotificationTransport = {
+  async trigger() {
+    throw new Error("Knock is down");
+  },
+  async cancel() {
+    throw new Error("Knock is down");
+  },
+  async archiveMessages() {
+    throw new Error("Knock is down");
+  },
+};
+
+type StoredMessage = {
+  id: string;
+  source: string;
+  /** Knock's merged data: for a batch, the newest trigger's values win. */
+  data: Record<string, unknown>;
+  activities: { data: Record<string, unknown> }[];
+  recipient?: string;
+  archived_at?: string | null;
+};
+
+/**
+ * Knock's messages API, as far as the archive uses it, over a fixed store.
+ * Like Knock's, its list includes archived messages.
+ */
+function fakeKnockMessages(stored: StoredMessage[]) {
+  const archivedBatches: string[][] = [];
+  // Knock's trigger_data filter matches top-level scalar values only.
+  const matches = (data: Record<string, unknown>, filter?: string) =>
+    !filter ||
+    Object.entries(JSON.parse(filter)).every(([k, v]) => data[k] === v);
+  const messages: KnockMessagesApi = {
+    async *list(query) {
+      for (const message of stored) {
+        if (query.source && message.source !== query.source) continue;
+        if (matches(message.data, query.trigger_data)) {
+          yield {
+            id: message.id,
+            recipient: message.recipient ?? "cadence-1",
+            archived_at: message.archived_at ?? null,
+          };
+        }
+      }
+    },
+    async *listActivities(messageId) {
+      yield* stored.find((m) => m.id === messageId)?.activities ?? [];
+    },
+    batch: {
+      async archive({ message_ids }) {
+        archivedBatches.push(message_ids);
+      },
+    },
+  };
+  const knock: KnockClient = {
+    workflows: {
+      async cancel() {},
+    } as unknown as KnockClient["workflows"],
+    messages,
+  };
+  return { knock, archivedBatches };
 }
 
 let db: Db;
@@ -86,7 +165,7 @@ beforeEach(() => {
     .get().id;
 });
 
-describe("notifyCommentReply", () => {
+describe("notifyCommentPosted: Comment reply", () => {
   it("sends Comment reply to the author of the parent Comment", async () => {
     const question = postComment(db, student.id, lessonId, null, "Why?");
     const reply = postComment(
@@ -98,7 +177,7 @@ describe("notifyCommentReply", () => {
     );
     const { transport, triggers } = recordingTransport();
 
-    await notifyCommentReply(db, reply.id, transport);
+    await notifyCommentPosted(db, reply.id, transport);
 
     expect(triggers).toHaveLength(1);
     expect(triggers[0].workflowKey).toBe("comment-reply");
@@ -119,7 +198,7 @@ describe("notifyCommentReply", () => {
     );
     const { transport, triggers } = recordingTransport();
 
-    await notifyCommentReply(db, reply.id, transport);
+    await notifyCommentPosted(db, reply.id, transport);
 
     expect(triggers.map((t) => t.recipients.map((r) => r.id))).toEqual([
       [`cadence-${student.id}`],
@@ -137,16 +216,7 @@ describe("notifyCommentReply", () => {
     );
     const { transport, triggers } = recordingTransport();
 
-    await notifyCommentReply(db, reply.id, transport);
-
-    expect(triggers).toEqual([]);
-  });
-
-  it("sends nothing for a top-level Comment", async () => {
-    const question = postComment(db, student.id, lessonId, null, "Why?");
-    const { transport, triggers } = recordingTransport();
-
-    await notifyCommentReply(db, question.id, transport);
+    await notifyCommentPosted(db, reply.id, transport);
 
     expect(triggers).toEqual([]);
   });
@@ -162,7 +232,7 @@ describe("notifyCommentReply", () => {
     );
     const { transport, triggers } = recordingTransport();
 
-    await notifyCommentReply(db, reply.id, transport);
+    await notifyCommentPosted(db, reply.id, transport);
 
     expect(triggers[0].data).toEqual({
       comment_id: reply.id,
@@ -181,15 +251,231 @@ describe("notifyCommentReply", () => {
       question.id,
       "Because."
     );
-    const failing: NotificationTransport = {
-      async trigger() {
-        throw new Error("Knock is down");
-      },
-    };
-
     await expect(
-      notifyCommentReply(db, reply.id, failing)
+      notifyCommentPosted(db, reply.id, failing)
     ).resolves.toBeUndefined();
+  });
+});
+
+describe("notifyCommentPosted: New question", () => {
+  it("sends New question to the course's owning Instructor", async () => {
+    const question = postComment(db, student.id, lessonId, null, "Why?");
+    const { transport, triggers } = recordingTransport();
+
+    await notifyCommentPosted(db, question.id, transport);
+
+    expect(triggers).toHaveLength(1);
+    expect(triggers[0].workflowKey).toBe("new-question");
+    expect(triggers[0].recipients).toEqual([
+      {
+        id: `cadence-${instructor.id}`,
+        name: "Sarah",
+        email: "sarah@example.com",
+      },
+    ]);
+  });
+
+  it("sends nothing for a top-level Comment by the course's Instructor", async () => {
+    const post = postComment(db, instructor.id, lessonId, null, "Welcome!");
+    const { transport, triggers } = recordingTransport();
+
+    await notifyCommentPosted(db, post.id, transport);
+
+    expect(triggers).toEqual([]);
+  });
+
+  it("sends nothing for a top-level Comment by a Platform Admin", async () => {
+    const admin = db
+      .insert(schema.users)
+      .values({
+        name: "Ada",
+        email: "ada@example.com",
+        role: UserRole.Admin,
+      })
+      .returning()
+      .get();
+    const post = postComment(db, admin.id, lessonId, null, "Heads up.");
+    const { transport, triggers } = recordingTransport();
+
+    await notifyCommentPosted(db, post.id, transport);
+
+    expect(triggers).toEqual([]);
+  });
+
+  it("sends Comment reply, not New question, for a Reply", async () => {
+    const question = postComment(db, student.id, lessonId, null, "Why?");
+    const reply = postComment(
+      db,
+      otherStudent.id,
+      lessonId,
+      question.id,
+      "Same here."
+    );
+    const { transport, triggers } = recordingTransport();
+
+    await notifyCommentPosted(db, reply.id, transport);
+
+    expect(triggers.map((t) => t.workflowKey)).toEqual(["comment-reply"]);
+  });
+
+  it("carries the Question and its lesson, the batch key, and a link to it", async () => {
+    const question = postComment(db, student.id, lessonId, null, "Why?");
+    const { transport, triggers } = recordingTransport();
+
+    await notifyCommentPosted(db, question.id, transport);
+
+    expect(triggers[0].actor).toEqual({
+      id: `cadence-${student.id}`,
+      name: "Liam",
+      email: "liam@example.com",
+    });
+    expect(triggers[0].data).toEqual({
+      comment_id: question.id,
+      lesson_id: lessonId,
+      actor_name: "Liam",
+      lesson_title: "Generics",
+      url: `/courses/intro-ts/lessons/${lessonId}#comment-${question.id}`,
+    });
+  });
+
+  it("can be cancelled by the Question's id while its batch is open", async () => {
+    const question = postComment(db, student.id, lessonId, null, "Why?");
+    const { transport, triggers } = recordingTransport();
+
+    await notifyCommentPosted(db, question.id, transport);
+
+    expect(triggers[0].cancellationKey).toBe(`comment-${question.id}`);
+  });
+});
+
+describe("archiveCommentNotifications", () => {
+  it("archives every Notification about the deleted Comment, for every recipient", async () => {
+    const question = postComment(db, student.id, lessonId, null, "Why?");
+    const { transport, archived } = recordingTransport();
+
+    await archiveCommentNotifications(db, question.id, transport);
+
+    expect(archived).toEqual([
+      { comment_id: question.id, lesson_id: lessonId },
+    ]);
+  });
+
+  it("does not throw when the transport fails", async () => {
+    const question = postComment(db, student.id, lessonId, null, "Why?");
+    await expect(
+      archiveCommentNotifications(db, question.id, failing)
+    ).resolves.toBeUndefined();
+  });
+
+  it("cancels a deleted Question's New question for the owning Instructor, in case its batch is still open", async () => {
+    const question = postComment(db, student.id, lessonId, null, "Why?");
+    const { transport, cancelled } = recordingTransport();
+
+    await archiveCommentNotifications(db, question.id, transport);
+
+    expect(cancelled).toEqual([
+      {
+        workflow: "new-question",
+        cancellationKey: `comment-${question.id}`,
+        recipients: [`cadence-${instructor.id}`],
+      },
+    ]);
+  });
+
+  it("still archives when the cancel fails", async () => {
+    const question = postComment(db, student.id, lessonId, null, "Why?");
+    const { transport, archived } = recordingTransport();
+    transport.cancel = failing.cancel;
+
+    await archiveCommentNotifications(db, question.id, transport);
+
+    expect(archived).toEqual([
+      { comment_id: question.id, lesson_id: lessonId },
+    ]);
+  });
+
+  describe("archiving a delivered New question", () => {
+    function softDelete(commentId: number) {
+      db.update(schema.comments)
+        .set({ deletedAt: new Date().toISOString() })
+        .where(eq(schema.comments.id, commentId))
+        .run();
+    }
+
+    /** A delivered New question batch holding `ids`, newest last. */
+    function batchOf(id: string, ids: number[], archived_at?: string) {
+      const activities = ids.map((comment_id) => ({
+        data: { comment_id, lesson_id: lessonId },
+      }));
+      return {
+        id,
+        source: "new-question",
+        data: activities.at(-1)!.data,
+        activities,
+        archived_at,
+      };
+    }
+
+    it("leaves it in the Feed while any Question in it is live", async () => {
+      const q1 = postComment(db, student.id, lessonId, null, "One?");
+      const q2 = postComment(db, student.id, lessonId, null, "Two?");
+      softDelete(q2.id);
+      const { knock, archivedBatches } = fakeKnockMessages([
+        batchOf("batch", [q1.id, q2.id]),
+      ]);
+
+      await archiveCommentNotifications(db, q2.id, knockTransport(knock));
+
+      expect(archivedBatches.flat()).toEqual([]);
+    });
+
+    it("archives it once every Question in it is deleted", async () => {
+      const q1 = postComment(db, student.id, lessonId, null, "One?");
+      const q2 = postComment(db, otherStudent.id, lessonId, null, "Two?");
+      softDelete(q1.id);
+      softDelete(q2.id);
+      const { knock, archivedBatches } = fakeKnockMessages([
+        batchOf("batch", [q1.id, q2.id]),
+      ]);
+
+      await archiveCommentNotifications(db, q2.id, knockTransport(knock));
+
+      expect(archivedBatches.flat()).toEqual(["batch"]);
+    });
+
+    it("archives a lone New question when its Question is deleted", async () => {
+      const q1 = postComment(db, student.id, lessonId, null, "One?");
+      softDelete(q1.id);
+      const { knock, archivedBatches } = fakeKnockMessages([
+        batchOf("lone", [q1.id]),
+      ]);
+
+      await archiveCommentNotifications(db, q1.id, knockTransport(knock));
+
+      expect(archivedBatches.flat()).toEqual(["lone"]);
+    });
+
+    it("skips a New question that is already archived", async () => {
+      const q1 = postComment(db, student.id, lessonId, null, "One?");
+      softDelete(q1.id);
+      const { knock, archivedBatches } = fakeKnockMessages([
+        batchOf("old", [q1.id], "2026-11-23T10:00:00Z"),
+      ]);
+
+      await archiveCommentNotifications(db, q1.id, knockTransport(knock));
+
+      expect(archivedBatches.flat()).toEqual([]);
+    });
+  });
+
+  it("cancels nothing when a Reply is deleted", async () => {
+    const question = postComment(db, student.id, lessonId, null, "Why?");
+    const reply = postComment(db, instructor.id, lessonId, question.id, "Hi");
+    const { transport, cancelled } = recordingTransport();
+
+    await archiveCommentNotifications(db, reply.id, transport);
+
+    expect(cancelled).toEqual([]);
   });
 });
 
@@ -221,5 +507,215 @@ describe("outboxTransport", () => {
       ],
       data: commentReplyData,
     });
+  });
+
+  it("records an archive request in the outbox when there is no Knock key", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "outbox-"));
+
+    await outboxTransport(directory).archiveMessages(
+      { comment_id: 42, lesson_id: 3 },
+      () => true
+    );
+
+    const files = readdirSync(directory);
+    expect(files).toHaveLength(1);
+    expect(files[0]).toMatch(/-notification-archive\.json$/);
+    const written = JSON.parse(readFileSync(join(directory, files[0]), "utf8"));
+    expect(written).toEqual({ archive: { comment_id: 42, lesson_id: 3 } });
+  });
+
+  it("records a cancel request in the outbox when there is no Knock key", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "outbox-"));
+
+    await outboxTransport(directory).cancel({
+      workflow: "new-question",
+      cancellationKey: "comment-42",
+      recipients: ["cadence-1"],
+    });
+
+    const files = readdirSync(directory);
+    expect(files).toHaveLength(1);
+    expect(files[0]).toMatch(/-notification-cancel\.json$/);
+    const written = JSON.parse(readFileSync(join(directory, files[0]), "utf8"));
+    expect(written).toEqual({
+      cancel: {
+        workflow: "new-question",
+        cancellationKey: "comment-42",
+        recipients: ["cadence-1"],
+      },
+    });
+  });
+});
+
+/** Knock's workflows API, recording what the transport asks of it. */
+function fakeKnockWorkflows() {
+  const triggered: { key: string; body: Record<string, unknown> }[] = [];
+  const cancelled: { key: string; body: Record<string, unknown> }[] = [];
+  const workflows: KnockClient["workflows"] = {
+    trigger: (async (key: string, body: Record<string, unknown>) => {
+      triggered.push({ key, body });
+      return { workflow_run_id: "run-1" };
+    }) as unknown as KnockClient["workflows"]["trigger"],
+    cancel: (async (key: string, body: Record<string, unknown>) => {
+      cancelled.push({ key, body });
+    }) as unknown as KnockClient["workflows"]["cancel"],
+  };
+  return { workflows, triggered, cancelled };
+}
+
+const noMessages: KnockMessagesApi = {
+  async *list() {},
+  async *listActivities() {},
+  batch: { async archive() {} },
+};
+
+describe("knockTransport trigger and cancel", () => {
+  const person = { id: "cadence-1", name: "Sarah", email: "sarah@example.com" };
+  const newQuestionData = {
+    comment_id: 9,
+    lesson_id: 3,
+    actor_name: "Liam",
+    lesson_title: "Generics",
+    url: "/courses/intro-ts/lessons/3#comment-9",
+  };
+
+  it("triggers with the cancellation key", async () => {
+    const { workflows, triggered } = fakeKnockWorkflows();
+
+    await knockTransport({ workflows, messages: noMessages }).trigger(
+      "new-question",
+      {
+        recipients: [person],
+        data: newQuestionData,
+        cancellationKey: "comment-9",
+      }
+    );
+
+    expect(triggered).toEqual([
+      {
+        key: "new-question",
+        body: {
+          recipients: [person],
+          actor: undefined,
+          data: newQuestionData,
+          cancellation_key: "comment-9",
+        },
+      },
+    ]);
+  });
+
+  it("cancels by key for the given recipients", async () => {
+    const { workflows, cancelled } = fakeKnockWorkflows();
+
+    await knockTransport({ workflows, messages: noMessages }).cancel({
+      workflow: "new-question",
+      cancellationKey: "comment-9",
+      recipients: ["cadence-1"],
+    });
+
+    expect(cancelled).toEqual([
+      {
+        key: "new-question",
+        body: { cancellation_key: "comment-9", recipients: ["cadence-1"] },
+      },
+    ]);
+  });
+});
+
+describe("knockTransport archiveMessages", () => {
+  const batched = (id: string, ids: number[], lesson_id = 7) => {
+    const activities = ids.map((comment_id) => ({
+      data: { comment_id, lesson_id },
+    }));
+    return {
+      id,
+      source: "new-question",
+      data: activities.at(-1)!.data,
+      activities,
+    };
+  };
+  const deleted =
+    (...ids: number[]) =>
+    (commentId: number) =>
+      ids.includes(commentId);
+
+  it("archives a New question on the lesson once every Question in it is deleted", async () => {
+    const { knock, archivedBatches } = fakeKnockMessages([
+      batched("batched", [1, 2]),
+      batched("other-lesson", [3], 8),
+    ]);
+
+    await knockTransport(knock).archiveMessages(
+      { comment_id: 1, lesson_id: 7 },
+      deleted(1, 2, 3)
+    );
+
+    expect(archivedBatches.flat()).toEqual(["batched"]);
+  });
+
+  it("leaves a New question alone while any Question in it is live", async () => {
+    const { knock, archivedBatches } = fakeKnockMessages([
+      batched("batched", [1, 2]),
+    ]);
+
+    await knockTransport(knock).archiveMessages(
+      { comment_id: 2, lesson_id: 7 },
+      deleted(2)
+    );
+
+    expect(archivedBatches.flat()).toEqual([]);
+  });
+
+  it("leaves a New question alone that doesn't hold the deleted Comment", async () => {
+    const { knock, archivedBatches } = fakeKnockMessages([
+      batched("batched", [1, 2]),
+    ]);
+
+    await knockTransport(knock).archiveMessages(
+      { comment_id: 5, lesson_id: 7 },
+      deleted(1, 2, 5)
+    );
+
+    expect(archivedBatches.flat()).toEqual([]);
+  });
+
+  it("skips messages that are already archived", async () => {
+    const { knock, archivedBatches } = fakeKnockMessages([
+      { ...batched("old", [1]), archived_at: "2026-11-23T10:00:00Z" },
+      {
+        id: "old-reply",
+        source: "comment-reply",
+        data: { comment_id: 1 },
+        activities: [{ data: { comment_id: 1 } }],
+        archived_at: "2026-11-23T10:00:00Z",
+      },
+    ]);
+
+    await knockTransport(knock).archiveMessages(
+      { comment_id: 1, lesson_id: 7 },
+      deleted(1)
+    );
+
+    expect(archivedBatches.flat()).toEqual([]);
+  });
+
+  it("archives every recipient's Comment reply about the deleted Comment", async () => {
+    const reply = (id: string) => ({
+      id,
+      source: "comment-reply",
+      data: { comment_id: 9 },
+      activities: [{ data: { comment_id: 9 } }],
+    });
+    const { knock, archivedBatches } = fakeKnockMessages([
+      reply("for-liam"),
+      reply("for-maya"),
+    ]);
+
+    await knockTransport(knock).archiveMessages(
+      { comment_id: 9, lesson_id: 7 },
+      deleted(9)
+    );
+
+    expect(archivedBatches.flat().sort()).toEqual(["for-liam", "for-maya"]);
   });
 });

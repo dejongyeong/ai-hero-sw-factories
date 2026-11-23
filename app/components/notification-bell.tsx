@@ -14,13 +14,17 @@ import {
   Check,
   CheckCheck,
   ChevronRight,
+  MessageCircleQuestion,
   MessageSquareReply,
 } from "lucide-react";
 import { cn, formatRelativeTime } from "~/lib/utils";
 import {
   describeNotification,
   isNotificationWorkflow,
+  liveNewQuestion,
+  newQuestionCommentIds,
   NotificationWorkflow,
+  type DescribedNotification,
   type KnockFeedSession,
 } from "~/lib/notifications";
 import {
@@ -59,9 +63,11 @@ export function NotificationFeedProvider({
       user={{ id: session.userId }}
       userToken={session.userToken}
     >
+      {/* Rich mode, not the client's default compact one, so a batched item
+          carries total_activities and each Question's own activity. */}
       <KnockFeedProvider
         feedId={session.feedChannelId}
-        defaultFeedOptions={{ page_size: POPOVER_PAGE_SIZE }}
+        defaultFeedOptions={{ page_size: POPOVER_PAGE_SIZE, mode: "rich" }}
       >
         {children}
       </KnockFeedProvider>
@@ -94,7 +100,11 @@ export function NotificationBell({ live }: { live: boolean }) {
 
 function LiveBell() {
   const { feedClient, useFeedStore } = useKnockFeed();
-  // Unread, not unseen: the count stays until a Notification is read.
+  // Unread, not unseen: the count stays until a Notification is read. It is
+  // Knock's count, so it can include an unread New question the popover hides
+  // because every Question in it is deleted (see liveNewQuestion): one whose
+  // last Question went just after the batch window closed, too late to cancel
+  // and before the message existed to archive. An accepted caveat, not fixed.
   const unreadCount = useFeedStore((state) => state.metadata.unread_count);
   const [load, setLoad] = useState<FeedLoad>("pending");
   // Fetched once here, not on every open, so the footer doesn't pop in late.
@@ -146,9 +156,32 @@ function LivePanel({
   const hasMore = useFeedStore((state) => Boolean(state.pageInfo.after));
   const networkStatus = useFeedStore((state) => state.networkStatus);
   const navigate = useNavigate();
+  const liveness = useLiveQuestions(items);
+
+  // Each row's sentence and link. A New question is counted without its
+  // deleted Questions; one with none live is hidden, and one whose Questions
+  // are still being checked is held back rather than shown with a wrong count.
+  const rows = new Map<string, DescribedNotification | null>();
+  let checking = false;
+  for (const item of items) {
+    const row = describeRow(item, liveness);
+    if (row === "checking") checking = true;
+    else if (row !== "hidden") rows.set(item.id, row);
+  }
+  const shown = items.filter((item) => rows.has(item.id));
+
+  // Skeleton rows until the first liveness check is back, so the first view
+  // is never a count that is about to change. Later pages hold back only
+  // their own unchecked rows.
+  const [settled, setSettled] = useState(false);
+  if (!settled && load !== "pending" && !checking) setSettled(true);
 
   // The Unread filter arrives with the filter chips; until then it's off.
-  const body = feedBody({ load, count: items.length, unreadOnly: false });
+  const body = feedBody({
+    load: !settled && load === "loaded" ? "pending" : load,
+    count: settled ? shown.length : 0,
+    unreadOnly: false,
+  });
 
   const markAllRead = () => {
     feedClient
@@ -177,7 +210,8 @@ function LivePanel({
         body={body}
         renderRows={() => (
           <FeedRows
-            page={popoverPage(items, { total: metadata.total_count, hasMore })}
+            page={popoverPage(shown, { total: metadata.total_count, hasMore })}
+            describe={(item) => rows.get(item.id) ?? null}
             canFetch={networkStatus === "ready"}
             loadingMore={networkStatus === "fetchMore"}
             onLoadMore={(pageSize) => {
@@ -194,6 +228,96 @@ function LivePanel({
       />
     </PopoverPanel>
   );
+}
+
+/**
+ * What the app has said about the Questions in the Feed's New question rows:
+ * whether each is live, and which couldn't be checked.
+ */
+type QuestionLiveness = {
+  live: ReadonlyMap<number, boolean>;
+  failed: ReadonlySet<number>;
+};
+
+/**
+ * Asks the app which Questions in the loaded New question rows are still
+ * live, as rows load. It lives in the popover, so every open checks afresh
+ * and picks up Questions deleted since. A failed check leaves those Questions
+ * to Knock's count.
+ */
+function useLiveQuestions(items: FeedItem[]): QuestionLiveness {
+  const [live, setLive] = useState<ReadonlyMap<number, boolean>>(new Map());
+  const [failed, setFailed] = useState<ReadonlySet<number>>(new Set());
+
+  const unchecked = new Set<number>();
+  for (const item of items) {
+    if (item.source.key !== NotificationWorkflow.NewQuestion) continue;
+    for (const id of newQuestionCommentIds(item)) {
+      if (!live.has(id) && !failed.has(id)) unchecked.add(id);
+    }
+  }
+  // A stable key, so the effect runs once per new set of ids.
+  const key = [...unchecked].sort((a, b) => a - b).join(",");
+
+  useEffect(() => {
+    if (!key) return;
+    const commentIds = key.split(",").map(Number);
+    let cancelled = false;
+    fetch("/api/live-comments", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ commentIds }),
+    })
+      .then(async (response) => {
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const { liveIds } = (await response.json()) as { liveIds: number[] };
+        if (cancelled) return;
+        const liveSet = new Set(liveIds);
+        setLive((previous) => {
+          const next = new Map(previous);
+          for (const id of commentIds) next.set(id, liveSet.has(id));
+          return next;
+        });
+      })
+      .catch((error: unknown) => {
+        console.error("Could not check which Questions are live", error);
+        if (!cancelled) {
+          setFailed((previous) => new Set([...previous, ...commentIds]));
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [key]);
+
+  return { live, failed };
+}
+
+/**
+ * A row's sentence and link, "hidden" for a New question with no Question
+ * live, or "checking" while its Questions' liveness is still on its way.
+ */
+function describeRow(
+  item: FeedItem,
+  { live, failed }: QuestionLiveness
+): DescribedNotification | null | "hidden" | "checking" {
+  if (item.source.key !== NotificationWorkflow.NewQuestion) {
+    return describeNotification(item.source.key, item.data);
+  }
+  const ids = newQuestionCommentIds(item);
+  let liveIds: Set<number> | null = new Set();
+  for (const id of ids) {
+    if (failed.has(id)) {
+      liveIds = null;
+      break;
+    }
+    const isLive = live.get(id);
+    if (isLive === undefined) return "checking";
+    if (isLive) liveIds.add(id);
+  }
+  const counted = liveNewQuestion(item, liveIds);
+  if (!counted) return "hidden";
+  return describeNotification(item.source.key, counted.data, counted.count);
 }
 
 /** The popover's header and pinned footer around whatever body it shows. */
@@ -390,6 +514,7 @@ function FeedMessage({
 /** Rows grouped under sticky Today / Yesterday / Earlier headers, loaded on scroll. */
 function FeedRows({
   page,
+  describe,
   canFetch,
   loadingMore,
   onLoadMore,
@@ -397,6 +522,7 @@ function FeedRows({
   onMarkRead,
 }: {
   page: PopoverPage<FeedItem>;
+  describe: (item: FeedItem) => DescribedNotification | null;
   canFetch: boolean;
   loadingMore: boolean;
   onLoadMore: (pageSize: number) => void;
@@ -435,6 +561,7 @@ function FeedRows({
               <FeedRow
                 key={item.id}
                 item={item}
+                described={describe(item)}
                 onOpen={onOpen}
                 onMarkRead={onMarkRead}
               />
@@ -461,6 +588,10 @@ const ROW_ICONS = {
     icon: <MessageSquareReply className="size-4" />,
     tone: "bg-sky-100 text-sky-600 dark:bg-sky-950",
   },
+  [NotificationWorkflow.NewQuestion]: {
+    icon: <MessageCircleQuestion className="size-4" />,
+    tone: "bg-violet-100 text-violet-600 dark:bg-violet-950",
+  },
 } satisfies Record<NotificationWorkflow, RowIcon>;
 
 const FALLBACK_ICON: RowIcon = {
@@ -470,14 +601,15 @@ const FALLBACK_ICON: RowIcon = {
 
 function FeedRow({
   item,
+  described,
   onOpen,
   onMarkRead,
 }: {
   item: FeedItem;
+  described: DescribedNotification | null;
   onOpen: (item: FeedItem, href: string | null) => void;
   onMarkRead: (item: FeedItem) => void;
 }) {
-  const described = describeNotification(item.source.key, item.data);
   const { icon, tone } = isNotificationWorkflow(item.source.key)
     ? ROW_ICONS[item.source.key]
     : FALLBACK_ICON;

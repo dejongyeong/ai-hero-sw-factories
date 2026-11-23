@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull } from "drizzle-orm";
 import type { Db } from "~/db";
 import { comments, courses, lessons, modules } from "~/db/schema";
 import { MAX_COMMENT_LENGTH, MIN_COMMENT_LENGTH } from "~/lib/comments";
@@ -136,6 +136,36 @@ export function editComment(
     .where(eq(comments.id, commentId))
     .returning()
     .get();
+}
+
+/**
+ * Of `commentIds`, those still live (not soft-deleted) on courses
+ * `instructorId` owns, in id order. A Comment elsewhere is left out exactly as
+ * a deleted or unknown one is, so the answer reveals nothing about Comments
+ * the Instructor can't see. The Feed uses it to count a New question.
+ */
+export function liveCommentIds(
+  db: Db,
+  instructorId: number,
+  commentIds: number[]
+): number[] {
+  if (commentIds.length === 0) return [];
+  return db
+    .select({ id: comments.id })
+    .from(comments)
+    .innerJoin(lessons, eq(comments.lessonId, lessons.id))
+    .innerJoin(modules, eq(lessons.moduleId, modules.id))
+    .innerJoin(courses, eq(modules.courseId, courses.id))
+    .where(
+      and(
+        inArray(comments.id, commentIds),
+        isNull(comments.deletedAt),
+        eq(courses.instructorId, instructorId)
+      )
+    )
+    .orderBy(asc(comments.id))
+    .all()
+    .map((row) => row.id);
 }
 
 /**

@@ -8,6 +8,7 @@ import { z } from "zod";
 
 export const NotificationWorkflow = {
   CommentReply: "comment-reply",
+  NewQuestion: "new-question",
 } as const;
 
 export type NotificationWorkflow =
@@ -39,29 +40,39 @@ export type DescribedNotification = {
 /**
  * Pairs a workflow's trigger data schema with how to describe it. `describe`
  * takes raw Feed data, because Feed data comes from Knock and is parsed, not
- * trusted; it returns null for anything it can't read.
+ * trusted; it returns null for anything it can't read. `activityCount` is how
+ * many triggers a batched Feed item stands for; its data is the latest one's.
  */
 function workflow<S extends z.ZodTypeAny>(
   data: S,
-  describe: (data: z.infer<S>) => DescribedNotification
+  describe: (data: z.infer<S>, activityCount: number) => DescribedNotification
 ) {
   return {
     data,
-    describe(raw: unknown): DescribedNotification | null {
+    describe(
+      raw: unknown,
+      activityCount: number
+    ): DescribedNotification | null {
       const parsed = data.safeParse(raw);
-      return parsed.success ? describe(parsed.data) : null;
+      return parsed.success ? describe(parsed.data, activityCount) : null;
     },
   };
 }
 
+/**
+ * What every Notification about a Comment carries: the Comment (so deleting it
+ * archives the Notification), who posted it, where, and a link to it.
+ */
+const commentNotificationData = z.object({
+  comment_id: z.number().int(),
+  actor_name: z.string(),
+  lesson_title: z.string(),
+  url: z.string().startsWith("/"),
+});
+
 const workflows = {
   [NotificationWorkflow.CommentReply]: workflow(
-    z.object({
-      comment_id: z.number().int(),
-      actor_name: z.string(),
-      lesson_title: z.string(),
-      url: z.string().startsWith("/"),
-    }),
+    commentNotificationData,
     (data) => ({
       sentence: [
         { text: data.actor_name, bold: true },
@@ -71,6 +82,30 @@ const workflows = {
       href: data.url,
       category: "Discussions",
     })
+  ),
+  [NotificationWorkflow.NewQuestion]: workflow(
+    // `lesson_id` is the batch key.
+    commentNotificationData.extend({ lesson_id: z.number().int() }),
+    (data, count) => {
+      return {
+        sentence:
+          count > 1
+            ? [
+                { text: `${count} new questions`, bold: true },
+                { text: " on ", bold: false },
+                { text: data.lesson_title, bold: true },
+              ]
+            : [
+                { text: data.actor_name, bold: true },
+                { text: " asked a question on ", bold: false },
+                { text: data.lesson_title, bold: true },
+              ],
+        // A batch links to its latest Question: Knock's merged data, or the
+        // latest live Question's when the Feed passes it (liveNewQuestion).
+        href: data.url,
+        category: "Discussions",
+      };
+    }
   ),
 } satisfies Record<NotificationWorkflow, unknown>;
 
@@ -88,12 +123,87 @@ export function isNotificationWorkflow(
 
 /**
  * Turns a Feed item's workflow key and trigger data back into its sentence and
- * link. Returns null for an unknown workflow or data it can't read.
+ * link. `activityCount` is how many triggers Knock batched into the item.
+ * Returns null for an unknown workflow or data it can't read.
  */
 export function describeNotification(
   workflowKey: string,
-  data: unknown
+  data: unknown,
+  activityCount = 1
 ): DescribedNotification | null {
   if (!isNotificationWorkflow(workflowKey)) return null;
-  return workflows[workflowKey].describe(data);
+  return workflows[workflowKey].describe(data, activityCount);
+}
+
+// ─── New question: what is still live ───
+// A delivered New question can hold Questions deleted since: a delete after
+// the batch window closed can't be cancelled out of it, and the message is
+// only archived once every Question in it is deleted. So the Feed counts it at
+// render time, against the Comment ids the app says are still live. The Feed
+// must be loaded in Knock's "rich" mode, or items carry neither
+// `total_activities` nor `activities`.
+
+/** A Feed item, as far as counting a New question needs it. */
+export type NewQuestionItem = {
+  data: unknown;
+  total_activities?: number;
+  activities?: { data: unknown }[];
+};
+
+type ListedQuestion = { comment_id: number; data: unknown };
+
+function commentIdOf(data: unknown): number | null {
+  if (typeof data !== "object" || data === null) return null;
+  const id = (data as { comment_id?: unknown }).comment_id;
+  return typeof id === "number" && Number.isInteger(id) ? id : null;
+}
+
+/** Each Question the item lists, one per activity, or its own data if none. */
+function questionsIn(item: NewQuestionItem): ListedQuestion[] {
+  const sources = item.activities?.length
+    ? item.activities.map((activity) => activity.data)
+    : [item.data];
+  return sources.flatMap((data) => {
+    const comment_id = commentIdOf(data);
+    return comment_id === null ? [] : [{ comment_id, data }];
+  });
+}
+
+/** The Question ids a New question Feed item lists, to check for liveness. */
+export function newQuestionCommentIds(item: NewQuestionItem): number[] {
+  return [...new Set(questionsIn(item).map((q) => q.comment_id))];
+}
+
+/**
+ * What a New question Feed item shows once deleted Questions are left out:
+ * how many are live, and the data to describe it by, which is the latest live
+ * Question's, so a lone survivor reads as asked by its asker and the row links
+ * to it. Null when none is live, so the row is hidden. `live` null means the
+ * check couldn't be made: Knock's count and data are shown as they are.
+ *
+ * Knock lists at most 10 activities on a batched item by default
+ * (https://docs.knock.app/designing-workflows/batch-function: `activities` is
+ * "a list of up to ten of the activity objects included within the batch"),
+ * while `total_activities` counts every run
+ * (https://docs.knock.app/in-app-ui/api-overview). So the count is the total
+ * minus the deleted Questions it can see; a deleted one beyond those listed is
+ * still counted.
+ */
+export function liveNewQuestion(
+  item: NewQuestionItem,
+  live: ReadonlySet<number> | null
+): { count: number; data: unknown } | null {
+  const total = item.total_activities ?? 1;
+  if (live === null) return { count: total, data: item.data };
+  const questions = questionsIn(item);
+  const deleted = questions.filter((q) => !live.has(q.comment_id)).length;
+  const count = total - deleted;
+  if (count <= 0) return null;
+  // Comment ids grow with time, so the highest live one is the latest.
+  const latest = questions
+    .filter((q) => live.has(q.comment_id))
+    .sort((a, b) => a.comment_id - b.comment_id)
+    .at(-1);
+  // When every live Question is beyond those listed, keep Knock's data.
+  return { count, data: latest?.data ?? item.data };
 }
