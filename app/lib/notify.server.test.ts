@@ -7,6 +7,7 @@ import * as schema from "~/db/schema";
 import {
   CourseStatus,
   RefundRequestStatus,
+  RefundStatus,
   TeamMemberRole,
   UserRole,
 } from "~/db/schema";
@@ -19,6 +20,8 @@ import {
   archiveCommentNotifications,
   knockTransport,
   notifyCommentPosted,
+  notifyRefundFailed,
+  notifyRefundIssued,
   notifyRefundRequestDecided,
   notifyRefundRequestRaised,
   outboxTransport,
@@ -936,6 +939,279 @@ describe("decideRefundRequest: Refund Request approved and declined", () => {
         "1 Seat has been claimed on this Team Licence, so it cannot be refunded.",
     });
     expect(triggers).toEqual([]);
+  });
+});
+
+describe("Refund Issued and Refund Failed", () => {
+  let admin: typeof schema.users.$inferSelect;
+
+  beforeEach(() => {
+    admin = db
+      .insert(schema.users)
+      .values({ name: "Ada", email: "ada@example.com", role: UserRole.Admin })
+      .returning()
+      .get();
+  });
+
+  /** An approved Refund Request on a Purchase by `buyerId`, and its Refund. */
+  async function refundFor(buyerId: number, amountPaid = 7900) {
+    const purchase = db
+      .insert(schema.purchases)
+      .values({ userId: buyerId, courseId, amountPaid })
+      .returning()
+      .get();
+    const raised = raiseRefundRequest(
+      db,
+      purchase.id,
+      buyerId,
+      "It wasn't what I expected.",
+      new Date()
+    );
+    if (!raised.ok) throw new Error(raised.error);
+    const decided = await decideRefundRequest(
+      db,
+      raised.refundRequestId,
+      admin.id,
+      RefundRequestStatus.Approved,
+      recordingTransport().transport
+    );
+    if (!decided.ok) throw new Error(decided.error);
+    const refund = db
+      .select()
+      .from(schema.refunds)
+      .where(eq(schema.refunds.refundRequestId, raised.refundRequestId))
+      .get();
+    if (!refund) throw new Error("No Refund was created");
+    return { refundId: refund.id, refundRequestId: raised.refundRequestId };
+  }
+
+  /** A Student who is a Team's Team Admin, and so buys its Team Licences. */
+  function addTeamAdmin() {
+    const teamAdmin = db
+      .insert(schema.users)
+      .values({
+        name: "Tara",
+        email: "tara@example.com",
+        role: UserRole.Student,
+      })
+      .returning()
+      .get();
+    const team = db.insert(schema.teams).values({}).returning().get();
+    db.insert(schema.teamMembers)
+      .values({
+        teamId: team.id,
+        userId: teamAdmin.id,
+        role: TeamMemberRole.Admin,
+      })
+      .run();
+    return teamAdmin;
+  }
+
+  /** Moves a Refund on, as whatever settles it with the payment provider. */
+  function settle(
+    refundId: number,
+    status: RefundStatus.Issued | RefundStatus.Failed
+  ) {
+    db.update(schema.refunds)
+      .set({ status, settledAt: new Date().toISOString() })
+      .where(eq(schema.refunds.id, refundId))
+      .run();
+  }
+
+  describe("notifyRefundIssued", () => {
+    it("sends Refund Issued to the Student, with the amount and the course", async () => {
+      const { refundId } = await refundFor(student.id, 7900);
+      settle(refundId, RefundStatus.Issued);
+      const { transport, triggers } = recordingTransport();
+
+      await notifyRefundIssued(db, refundId, transport);
+
+      expect(triggers).toEqual([
+        {
+          workflowKey: "refund-issued",
+          recipients: [
+            {
+              id: `cadence-${student.id}`,
+              name: "Liam",
+              email: "liam@example.com",
+            },
+          ],
+          data: {
+            refund_id: refundId,
+            course_title: "Introduction to TypeScript",
+            amount: "$79.00",
+            url: "/courses/intro-ts",
+          },
+        },
+      ]);
+    });
+
+    it("sends a Team Licence's Refund Issued to its Team Admin", async () => {
+      const teamAdmin = addTeamAdmin();
+      const { refundId } = await refundFor(teamAdmin.id, 7900 * 3);
+      settle(refundId, RefundStatus.Issued);
+      const { transport, triggers } = recordingTransport();
+
+      await notifyRefundIssued(db, refundId, transport);
+
+      expect(triggers.map((t) => t.recipients.map((r) => r.id))).toEqual([
+        [`cadence-${teamAdmin.id}`],
+      ]);
+      expect(triggers[0].data).toMatchObject({ amount: "$237.00" });
+    });
+
+    it("sends nothing for a Refund that isn't Issued", async () => {
+      const pending = await refundFor(student.id);
+      const failed = await refundFor(otherStudent.id);
+      settle(failed.refundId, RefundStatus.Failed);
+      const { transport, triggers } = recordingTransport();
+
+      await notifyRefundIssued(db, pending.refundId, transport);
+      await notifyRefundIssued(db, failed.refundId, transport);
+
+      expect(triggers).toEqual([]);
+    });
+
+    it("does not throw when the transport fails", async () => {
+      const { refundId } = await refundFor(student.id);
+      settle(refundId, RefundStatus.Issued);
+
+      await expect(
+        notifyRefundIssued(db, refundId, failing)
+      ).resolves.toBeUndefined();
+    });
+  });
+
+  describe("notifyRefundFailed", () => {
+    function addAdmin(name: string) {
+      return db
+        .insert(schema.users)
+        .values({
+          name,
+          email: `${name.toLowerCase()}@example.com`,
+          role: UserRole.Admin,
+        })
+        .returning()
+        .get();
+    }
+
+    function sent(triggers: Recorded[], workflow: string) {
+      return triggers.filter((t) => t.workflowKey === workflow);
+    }
+
+    it("tells the Student Cadence is on it, linking to the course", async () => {
+      const { refundId } = await refundFor(student.id);
+      settle(refundId, RefundStatus.Failed);
+      const { transport, triggers } = recordingTransport();
+
+      await notifyRefundFailed(db, refundId, transport);
+
+      expect(sent(triggers, "refund-failed")).toEqual([
+        {
+          workflowKey: "refund-failed",
+          recipients: [
+            {
+              id: `cadence-${student.id}`,
+              name: "Liam",
+              email: "liam@example.com",
+            },
+          ],
+          data: {
+            refund_id: refundId,
+            course_title: "Introduction to TypeScript",
+            url: "/courses/intro-ts",
+          },
+        },
+      ]);
+    });
+
+    it("tells every Platform Admin, linking to the Refund Request on the queue", async () => {
+      const ben = addAdmin("Ben");
+      const { refundId, refundRequestId } = await refundFor(student.id);
+      settle(refundId, RefundStatus.Failed);
+      const { transport, triggers } = recordingTransport();
+
+      await notifyRefundFailed(db, refundId, transport);
+
+      expect(sent(triggers, "refund-failed-admin")).toEqual([
+        {
+          workflowKey: "refund-failed-admin",
+          recipients: [
+            {
+              id: `cadence-${admin.id}`,
+              name: "Ada",
+              email: "ada@example.com",
+            },
+            { id: `cadence-${ben.id}`, name: "Ben", email: "ben@example.com" },
+          ],
+          data: {
+            refund_id: refundId,
+            refund_request_id: refundRequestId,
+            student_name: "Liam",
+            course_title: "Introduction to TypeScript",
+            url: `/admin/refund-requests?request=${refundRequestId}`,
+          },
+        },
+      ]);
+    });
+
+    it("sends a Team Licence's Student copy to its Team Admin", async () => {
+      const teamAdmin = addTeamAdmin();
+      const { refundId } = await refundFor(teamAdmin.id, 7900 * 3);
+      settle(refundId, RefundStatus.Failed);
+      const { transport, triggers } = recordingTransport();
+
+      await notifyRefundFailed(db, refundId, transport);
+
+      expect(
+        sent(triggers, "refund-failed").map((t) =>
+          t.recipients.map((r) => r.id)
+        )
+      ).toEqual([[`cadence-${teamAdmin.id}`]]);
+      expect(sent(triggers, "refund-failed-admin")[0].data).toMatchObject({
+        student_name: "Tara",
+      });
+    });
+
+    it("still tells the Platform Admins when the Student's copy fails", async () => {
+      const { refundId } = await refundFor(student.id);
+      settle(refundId, RefundStatus.Failed);
+      const { transport, triggers } = recordingTransport();
+      const flaky: NotificationTransport = {
+        ...transport,
+        async trigger(workflow, trigger) {
+          if (workflow === "refund-failed") throw new Error("Knock is down");
+          await transport.trigger(workflow, trigger);
+        },
+      };
+
+      await notifyRefundFailed(db, refundId, flaky);
+
+      expect(triggers.map((t) => t.workflowKey)).toEqual([
+        "refund-failed-admin",
+      ]);
+    });
+
+    it("sends nothing for a Refund that isn't Failed", async () => {
+      const pending = await refundFor(student.id);
+      const issued = await refundFor(otherStudent.id);
+      settle(issued.refundId, RefundStatus.Issued);
+      const { transport, triggers } = recordingTransport();
+
+      await notifyRefundFailed(db, pending.refundId, transport);
+      await notifyRefundFailed(db, issued.refundId, transport);
+
+      expect(triggers).toEqual([]);
+    });
+
+    it("does not throw when the transport fails", async () => {
+      const { refundId } = await refundFor(student.id);
+      settle(refundId, RefundStatus.Failed);
+
+      await expect(
+        notifyRefundFailed(db, refundId, failing)
+      ).resolves.toBeUndefined();
+    });
   });
 });
 

@@ -131,6 +131,75 @@ describe("describeNotification", () => {
     ).toBeNull();
   });
 
+  it("describes Refund Issued under Refunds, linking to the course", () => {
+    expect(
+      describeNotification("refund-issued", {
+        refund_id: 9,
+        course_title: "Introduction to TypeScript",
+        amount: "$79.00",
+        url: "/courses/intro-ts",
+      })
+    ).toEqual({
+      sentence: [
+        { text: "Your $79.00 refund for ", bold: false },
+        { text: "Introduction to TypeScript", bold: true },
+        { text: " has been sent", bold: false },
+      ],
+      href: "/courses/intro-ts",
+      category: "Refunds",
+    });
+  });
+
+  it("describes the Student's Refund Failed under Refunds, linking to the course", () => {
+    expect(
+      describeNotification("refund-failed", {
+        refund_id: 9,
+        course_title: "Introduction to TypeScript",
+        url: "/courses/intro-ts",
+      })
+    ).toEqual({
+      sentence: [
+        { text: "We couldn't send your refund for ", bold: false },
+        { text: "Introduction to TypeScript", bold: true },
+        { text: "; we're on it", bold: false },
+      ],
+      href: "/courses/intro-ts",
+      category: "Refunds",
+    });
+  });
+
+  it("describes a Platform Admin's Refund Failed under Refunds, linking to the queue", () => {
+    expect(
+      describeNotification("refund-failed-admin", {
+        refund_id: 9,
+        refund_request_id: 4,
+        student_name: "Liam",
+        course_title: "Introduction to TypeScript",
+        url: "/admin/refund-requests?request=4",
+      })
+    ).toEqual({
+      sentence: [
+        { text: "Refund for ", bold: false },
+        { text: "Liam", bold: true },
+        { text: " on ", bold: false },
+        { text: "Introduction to TypeScript", bold: true },
+        { text: " failed", bold: false },
+      ],
+      href: "/admin/refund-requests?request=4",
+      category: "Refunds",
+    });
+  });
+
+  it("returns null for a Refund Issued without its amount", () => {
+    expect(
+      describeNotification("refund-issued", {
+        refund_id: 9,
+        course_title: "Introduction to TypeScript",
+        url: "/courses/intro-ts",
+      })
+    ).toBeNull();
+  });
+
   it("returns null for a Refund Request raised it can't read", () => {
     expect(
       describeNotification("refund-request-raised", { actor_name: "Liam" })
