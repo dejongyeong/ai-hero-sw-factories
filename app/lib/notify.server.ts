@@ -9,6 +9,8 @@ import {
   modules,
   purchases,
   refundRequests,
+  refunds,
+  RefundStatus,
   users,
 } from "~/db/schema";
 import { knockConfig, knockUserId } from "~/lib/knock.server";
@@ -569,5 +571,121 @@ export async function notifyRefundRequestDecided(
       `Notification for the decision on Refund Request ${refundRequestId} failed`,
       error
     );
+  }
+}
+
+/**
+ * What a Refund's Notifications say: its amount, its status, its course, and
+ * the Student it goes back to, who is whoever raised its Refund Request (the
+ * Purchase's buyer, so a Team Licence's Team Admin).
+ */
+function getRefundForNotification(db: Db, refundId: number) {
+  return db
+    .select({
+      id: refunds.id,
+      status: refunds.status,
+      amount: refunds.amount,
+      refundRequestId: refunds.refundRequestId,
+      studentId: purchases.userId,
+      courseTitle: courses.title,
+      courseSlug: courses.slug,
+    })
+    .from(refunds)
+    .innerJoin(refundRequests, eq(refunds.refundRequestId, refundRequests.id))
+    .innerJoin(purchases, eq(refundRequests.purchaseId, purchases.id))
+    .innerJoin(courses, eq(purchases.courseId, courses.id))
+    .where(eq(refunds.id, refundId))
+    .get();
+}
+
+/**
+ * Called once a Refund has moved to Issued: Refund Issued tells the Student
+ * their money has been sent. A Refund that isn't Issued sends nothing. Always
+ * sent: its Knock workflow can't be switched off. Nothing in Cadence moves a
+ * Refund to Issued yet, so nothing calls this yet.
+ */
+export async function notifyRefundIssued(
+  db: Db,
+  refundId: number,
+  transport: NotificationTransport = defaultTransport()
+): Promise<void> {
+  try {
+    const refund = getRefundForNotification(db, refundId);
+    const student = refund && getUser(db, refund.studentId);
+    if (!refund || !student) return;
+    if (refund.status !== RefundStatus.Issued) return;
+
+    await transport.trigger(NotificationWorkflow.RefundIssued, {
+      recipients: [personFor(student)],
+      data: {
+        refund_id: refund.id,
+        course_title: refund.courseTitle,
+        amount: formatPrice(refund.amount),
+        url: courseHref(refund.courseSlug),
+      },
+    });
+  } catch (error) {
+    console.error(`Notification for Refund ${refundId} failed`, error);
+  }
+}
+
+/** Every Platform Admin. */
+function getPlatformAdmins(db: Db) {
+  return db
+    .select()
+    .from(users)
+    .where(eq(users.role, UserRole.Admin))
+    .orderBy(users.id)
+    .all();
+}
+
+/**
+ * Called once a Refund has moved to Failed: Refund Failed tells the Student
+ * Cadence is on it, and tells every Platform Admin so they can fix the
+ * payment, linking to its Refund Request on the admin queue. Each copy is sent
+ * on its own, so one failing doesn't stop the other. A Refund that isn't
+ * Failed sends nothing. Always sent: neither Knock workflow can be switched
+ * off. Nothing in Cadence moves a Refund to Failed yet, so nothing calls this
+ * yet.
+ */
+export async function notifyRefundFailed(
+  db: Db,
+  refundId: number,
+  transport: NotificationTransport = defaultTransport()
+): Promise<void> {
+  try {
+    const refund = getRefundForNotification(db, refundId);
+    const student = refund && getUser(db, refund.studentId);
+    if (!refund || !student) return;
+    if (refund.status !== RefundStatus.Failed) return;
+
+    await deliver(NotificationWorkflow.RefundFailed, async () => {
+      await transport.trigger(NotificationWorkflow.RefundFailed, {
+        recipients: [personFor(student)],
+        data: {
+          refund_id: refund.id,
+          course_title: refund.courseTitle,
+          url: courseHref(refund.courseSlug),
+        },
+      });
+    });
+
+    await deliver(NotificationWorkflow.RefundFailedAdmin, async () => {
+      const admins = getPlatformAdmins(db);
+      if (admins.length === 0) return;
+
+      await transport.trigger(NotificationWorkflow.RefundFailedAdmin, {
+        recipients: admins.map(personFor),
+        data: {
+          refund_id: refund.id,
+          refund_request_id: refund.refundRequestId,
+          student_name: student.name,
+          course_title: refund.courseTitle,
+          url: refundRequestHref(refund.refundRequestId),
+        },
+      });
+    });
+  } catch (error) {
+    console.error(`Notifications for Refund ${refundId} failed`, error);
   }
 }

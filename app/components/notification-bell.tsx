@@ -9,6 +9,7 @@ import {
 import type { FeedItem } from "@knocklabs/client";
 import {
   AlertCircle,
+  Banknote,
   Bell,
   BellOff,
   Check,
@@ -610,6 +611,18 @@ const ROW_ICONS = {
   },
   [NotificationWorkflow.RefundRequestDeclined]: {
     icon: <CircleX className="size-4" />,
+    tone: "bg-rose-100 text-rose-600 dark:bg-rose-950",
+  },
+  [NotificationWorkflow.RefundIssued]: {
+    icon: <Banknote className="size-4" />,
+    tone: "bg-emerald-100 text-emerald-600 dark:bg-emerald-950",
+  },
+  [NotificationWorkflow.RefundFailed]: {
+    icon: <AlertCircle className="size-4" />,
+    tone: "bg-rose-100 text-rose-600 dark:bg-rose-950",
+  },
+  [NotificationWorkflow.RefundFailedAdmin]: {
+    icon: <AlertCircle className="size-4" />,
     tone: "bg-rose-100 text-rose-600 dark:bg-rose-950",
   },
 } satisfies Record<NotificationWorkflow, RowIcon>;
