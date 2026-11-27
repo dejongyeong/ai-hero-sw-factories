@@ -155,6 +155,10 @@ _Avoid_: Reply notification, Reply alert
 The Notification telling a course's Instructor that a Question was asked on one of their lessons, batched per lesson over a fixed 10-minute window so a burst reads as one, such as "3 new questions on Generics". A Question deleted while the batch is still open is taken out of it. Once the batch has been sent, the Feed counts only the Questions in it still live, and reads and links as the latest live one, such as "Liam asked a question on Generics" when one is left. When none is live, it disappears from the Feed.
 _Avoid_: Question notification, New comment
 
+**New purchase**:
+The Notification telling a course's Instructor that someone bought it, such as "Liam bought Introduction to TypeScript" for an Individual Purchase or "Liam bought 5 seats on Introduction to TypeScript" for a Team Licence. It never goes to a Platform Admin or to the buyer. Purchases of one course are batched over 1 hour so a launch day reads as one, such as "3 new purchases of Introduction to TypeScript". It links to the buyer on the course's student roster, is on by default and can be switched off.
+_Avoid_: Sale notification, New enrollment, New sale
+
 **Refund Request raised**:
 The Notification telling every Platform Admin, except one who raised it themselves, that a Refund Request was raised, such as "Liam requested a refund for Introduction to TypeScript ($79.00)". It links to the Refund Request on the admin queue. A Platform Admin can switch it off.
 _Avoid_: Refund alert, New refund

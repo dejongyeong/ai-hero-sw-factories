@@ -18,6 +18,7 @@ export const NotificationWorkflow = {
   // recipient, so neither Knock template needs a branch on who reads it.
   RefundFailed: "refund-failed",
   RefundFailedAdmin: "refund-failed-admin",
+  NewPurchase: "new-purchase",
 } as const;
 
 export type NotificationWorkflow =
@@ -38,7 +39,7 @@ export type SentencePart = { text: string; bold: boolean };
  * The Feed category a Notification is filed under, as shown on its row. Each
  * new workflow adds its category here.
  */
-export type FeedCategory = "Discussions" | "Refunds";
+export type FeedCategory = "Discussions" | "Refunds" | "Enrollments";
 
 export type DescribedNotification = {
   sentence: SentencePart[];
@@ -233,6 +234,41 @@ const workflows = {
       ],
       href: data.url,
       category: "Refunds",
+    })
+  ),
+  [NotificationWorkflow.NewPurchase]: workflow(
+    z.object({
+      purchase_id: z.number().int(),
+      // The batch key.
+      course_id: z.number().int(),
+      actor_name: z.string(),
+      course_title: z.string(),
+      // How many Seats a Team Licence bought; null for an Individual Purchase.
+      seat_count: z.number().int().nullable(),
+      url: z.string().startsWith("/"),
+    }),
+    (data, count) => ({
+      sentence:
+        count > 1
+          ? [
+              { text: `${count} new purchases`, bold: true },
+              { text: " of ", bold: false },
+              { text: data.course_title, bold: true },
+            ]
+          : [
+              { text: data.actor_name, bold: true },
+              {
+                text:
+                  data.seat_count === null
+                    ? " bought "
+                    : ` bought ${data.seat_count} ${data.seat_count === 1 ? "seat" : "seats"} on `,
+                bold: false,
+              },
+              { text: data.course_title, bold: true },
+            ],
+      // A batch links to its latest buyer, from Knock's merged data.
+      href: data.url,
+      category: "Enrollments",
     })
   ),
 } satisfies Record<NotificationWorkflow, unknown>;

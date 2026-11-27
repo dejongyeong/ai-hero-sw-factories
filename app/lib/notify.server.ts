@@ -19,6 +19,7 @@ import { writeToOutbox } from "~/lib/outbox.server";
 import { commentHref } from "~/lib/comment-links";
 import { courseHref } from "~/lib/course-links";
 import { refundRequestHref } from "~/lib/refund-request-links";
+import { studentHref, studentRosterHref } from "~/lib/student-roster-links";
 import { formatPrice } from "~/lib/utils";
 import {
   NotificationWorkflow,
@@ -706,4 +707,55 @@ export async function notifyRefundFailed(
   } catch (error) {
     console.error(`Notifications for Refund ${refundId} failed`, error);
   }
+}
+
+/**
+ * Called once a Purchase is saved: New purchase tells the course's owning
+ * Instructor. Never a Platform Admin, and never the buyer. `seatCount` is
+ * how many Seats a Team Licence bought; null for an Individual Purchase.
+ */
+export async function notifyNewPurchase(
+  db: Db,
+  purchaseId: number,
+  seatCount: number | null,
+  transport: NotificationTransport = defaultTransport()
+): Promise<void> {
+  await deliver(NotificationWorkflow.NewPurchase, async () => {
+    const purchase = db
+      .select({
+        id: purchases.id,
+        buyerId: purchases.userId,
+        courseId: courses.id,
+        courseTitle: courses.title,
+        instructorId: courses.instructorId,
+      })
+      .from(purchases)
+      .innerJoin(courses, eq(purchases.courseId, courses.id))
+      .where(eq(purchases.id, purchaseId))
+      .get();
+    const buyer = purchase && getUser(db, purchase.buyerId);
+    const instructor = purchase && getUser(db, purchase.instructorId);
+    if (!purchase || !buyer || !instructor) return;
+    // The owning Instructor only: never a Platform Admin, never the buyer.
+    if (instructor.role === UserRole.Admin || instructor.id === buyer.id) {
+      return;
+    }
+
+    await transport.trigger(NotificationWorkflow.NewPurchase, {
+      recipients: [personFor(instructor)],
+      actor: personFor(buyer),
+      data: {
+        purchase_id: purchase.id,
+        course_id: purchase.courseId,
+        actor_name: buyer.name,
+        course_title: purchase.courseTitle,
+        seat_count: seatCount,
+        // A Team Licence's buyer is not enrolled, so has no roster row.
+        url:
+          seatCount === null
+            ? studentHref(purchase.courseId, buyer.id)
+            : studentRosterHref(purchase.courseId),
+      },
+    });
+  });
 }

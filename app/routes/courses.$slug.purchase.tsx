@@ -38,6 +38,7 @@ import { formatDuration, formatPrice } from "~/lib/utils";
 import { resolveCountry } from "~/lib/country.server";
 import { calculatePppPrice, getCountryTierInfo, COUNTRIES } from "~/lib/ppp";
 import { parseFormData, parseParams } from "~/lib/validation";
+import { notifyNewPurchase } from "~/lib/notify.server";
 
 function getCourseBySlug(slug: string) {
   return db.select().from(courses).where(eq(courses.slug, slug)).get();
@@ -367,15 +368,28 @@ export async function action({ params, request }: Route.ActionArgs) {
     if (isUserEnrolled(currentUserId, course.id)) {
       throw redirect(`/courses/${slug}`);
     }
-    createPurchase(currentUserId, course.id, pppPrice, country);
+    const purchase = createPurchase(
+      currentUserId,
+      course.id,
+      pppPrice,
+      country
+    );
     enrollUser(currentUserId, course.id, false, false);
+    await notifyNewPurchase(db, purchase.id, null);
     throw redirect(`/courses/${slug}/welcome`);
   }
 
   // Team licence — user does NOT get enrolled themselves
   const { quantity } = parsed.data;
   const totalPrice = pppPrice * quantity;
-  createTeamPurchase(currentUserId, course.id, totalPrice, country, quantity);
+  const { purchase } = createTeamPurchase(
+    currentUserId,
+    course.id,
+    totalPrice,
+    country,
+    quantity
+  );
+  await notifyNewPurchase(db, purchase.id, quantity);
   throw redirect(`/team`);
 }
 

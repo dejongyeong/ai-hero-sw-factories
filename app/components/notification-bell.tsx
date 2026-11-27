@@ -20,6 +20,7 @@ import {
   MessageCircleQuestion,
   MessageSquareReply,
   ReceiptText,
+  ShoppingCart,
   Undo2,
 } from "lucide-react";
 import { cn, formatRelativeTime } from "~/lib/utils";
@@ -624,6 +625,10 @@ const ROW_ICONS = {
   [NotificationWorkflow.RefundFailedAdmin]: {
     icon: <AlertCircle className="size-4" />,
     tone: "bg-rose-100 text-rose-600 dark:bg-rose-950",
+  },
+  [NotificationWorkflow.NewPurchase]: {
+    icon: <ShoppingCart className="size-4" />,
+    tone: "bg-emerald-100 text-emerald-600 dark:bg-emerald-950",
   },
 } satisfies Record<NotificationWorkflow, RowIcon>;
 

@@ -235,6 +235,59 @@ describe("describeNotification", () => {
       { text: "Generics", bold: true },
     ]);
   });
+
+  const newPurchase = {
+    purchase_id: 12,
+    course_id: 4,
+    actor_name: "Liam",
+    course_title: "Introduction to TypeScript",
+    seat_count: null,
+    url: "/instructor/4/students#student-2",
+  };
+
+  it("describes an Individual Purchase by its buyer, under Enrollments", () => {
+    expect(describeNotification("new-purchase", newPurchase, 1)).toEqual({
+      sentence: [
+        { text: "Liam", bold: true },
+        { text: " bought ", bold: false },
+        { text: "Introduction to TypeScript", bold: true },
+      ],
+      href: "/instructor/4/students#student-2",
+      category: "Enrollments",
+    });
+  });
+
+  it("describes a Team Licence with its seat count", () => {
+    expect(
+      describeNotification("new-purchase", { ...newPurchase, seat_count: 5 }, 1)
+        ?.sentence
+    ).toEqual([
+      { text: "Liam", bold: true },
+      { text: " bought 5 seats on ", bold: false },
+      { text: "Introduction to TypeScript", bold: true },
+    ]);
+  });
+
+  it("describes a one-Seat Team Licence in the singular", () => {
+    expect(
+      describeNotification("new-purchase", { ...newPurchase, seat_count: 1 }, 1)
+        ?.sentence
+    ).toEqual([
+      { text: "Liam", bold: true },
+      { text: " bought 1 seat on ", bold: false },
+      { text: "Introduction to TypeScript", bold: true },
+    ]);
+  });
+
+  it("describes a batch of New purchases by their count", () => {
+    expect(
+      describeNotification("new-purchase", newPurchase, 3)?.sentence
+    ).toEqual([
+      { text: "3 new purchases", bold: true },
+      { text: " of ", bold: false },
+      { text: "Introduction to TypeScript", bold: true },
+    ]);
+  });
 });
 
 describe("liveNewQuestion", () => {
