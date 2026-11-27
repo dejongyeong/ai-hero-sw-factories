@@ -22,6 +22,7 @@ import {
   ReceiptText,
   ShoppingCart,
   Undo2,
+  UserCheck,
 } from "lucide-react";
 import { cn, formatRelativeTime } from "~/lib/utils";
 import {
@@ -629,6 +630,10 @@ const ROW_ICONS = {
   [NotificationWorkflow.NewPurchase]: {
     icon: <ShoppingCart className="size-4" />,
     tone: "bg-emerald-100 text-emerald-600 dark:bg-emerald-950",
+  },
+  [NotificationWorkflow.SeatClaimed]: {
+    icon: <UserCheck className="size-4" />,
+    tone: "bg-violet-100 text-violet-600 dark:bg-violet-950",
   },
 } satisfies Record<NotificationWorkflow, RowIcon>;
 

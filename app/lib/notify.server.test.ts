@@ -25,6 +25,7 @@ import {
   notifyRefundIssued,
   notifyRefundRequestDecided,
   notifyRefundRequestRaised,
+  notifySeatClaimed,
   outboxTransport,
   type DeletedComment,
   type KnockClient,
@@ -1323,6 +1324,144 @@ describe("notifyNewPurchase", () => {
 
     await expect(
       notifyNewPurchase(db, purchase.id, null, failing)
+    ).resolves.toBeUndefined();
+  });
+});
+
+describe("notifySeatClaimed", () => {
+  let teamAdmin: typeof schema.users.$inferSelect;
+  let purchaseId: number;
+
+  beforeEach(() => {
+    teamAdmin = db
+      .insert(schema.users)
+      .values({
+        name: "Tara",
+        email: "tara@example.com",
+        role: UserRole.Student,
+      })
+      .returning()
+      .get();
+    const team = db.insert(schema.teams).values({}).returning().get();
+    db.insert(schema.teamMembers)
+      .values({
+        teamId: team.id,
+        userId: teamAdmin.id,
+        role: TeamMemberRole.Admin,
+      })
+      .run();
+    purchaseId = db
+      .insert(schema.purchases)
+      .values({ userId: teamAdmin.id, courseId, amountPaid: 7900 * 3 })
+      .returning()
+      .get().id;
+    db.insert(schema.coupons)
+      .values([
+        { teamId: team.id, courseId, code: "SEAT-1", purchaseId },
+        { teamId: team.id, courseId, code: "SEAT-2", purchaseId },
+        { teamId: team.id, courseId, code: "SEAT-3", purchaseId },
+      ])
+      .run();
+  });
+
+  /** Claims the Seat with `code` for `userId`, as redeeming it does. */
+  function claim(code: string, userId: number) {
+    return db
+      .update(schema.coupons)
+      .set({ redeemedByUserId: userId, redeemedAt: new Date().toISOString() })
+      .where(eq(schema.coupons.code, code))
+      .returning()
+      .get().id;
+  }
+
+  it("sends Seat claimed to the Team Admin who bought the Team Licence", async () => {
+    const seatId = claim("SEAT-1", student.id);
+    const { transport, triggers } = recordingTransport();
+
+    await notifySeatClaimed(db, seatId, transport);
+
+    expect(triggers).toHaveLength(1);
+    expect(triggers[0].workflowKey).toBe("seat-claimed");
+    expect(triggers[0].recipients).toEqual([
+      {
+        id: `cadence-${teamAdmin.id}`,
+        name: "Tara",
+        email: "tara@example.com",
+      },
+    ]);
+  });
+
+  it("carries the Claiming Student and the Team Licence's used and total Seats after the Claim", async () => {
+    claim("SEAT-1", otherStudent.id);
+    const seatId = claim("SEAT-2", student.id);
+    const { transport, triggers } = recordingTransport();
+
+    await notifySeatClaimed(db, seatId, transport);
+
+    expect(triggers[0].actor).toEqual({
+      id: `cadence-${student.id}`,
+      name: "Liam",
+      email: "liam@example.com",
+    });
+    expect(triggers[0].data).toEqual({
+      seat_id: seatId,
+      actor_name: "Liam",
+      course_title: "Introduction to TypeScript",
+      used_seats: 2,
+      total_seats: 3,
+      url: "/team",
+    });
+  });
+
+  it("counts only the Seats of the Claimed Seat's own Team Licence", async () => {
+    const team = db.select().from(schema.teams).get()!;
+    const topUp = db
+      .insert(schema.purchases)
+      .values({ userId: teamAdmin.id, courseId, amountPaid: 7900 * 2 })
+      .returning()
+      .get();
+    db.insert(schema.coupons)
+      .values([
+        { teamId: team.id, courseId, code: "TOP-1", purchaseId: topUp.id },
+        { teamId: team.id, courseId, code: "TOP-2", purchaseId: topUp.id },
+      ])
+      .run();
+    claim("SEAT-1", otherStudent.id);
+    const seatId = claim("TOP-1", student.id);
+    const { transport, triggers } = recordingTransport();
+
+    await notifySeatClaimed(db, seatId, transport);
+
+    expect(triggers[0].data).toMatchObject({ used_seats: 1, total_seats: 2 });
+  });
+
+  it("sends nothing for a Seat that was not Claimed, as when the Claim is refused", async () => {
+    const seat = db
+      .select()
+      .from(schema.coupons)
+      .where(eq(schema.coupons.code, "SEAT-1"))
+      .get()!;
+    const { transport, triggers } = recordingTransport();
+
+    await notifySeatClaimed(db, seat.id, transport);
+
+    expect(triggers).toEqual([]);
+  });
+
+  it("sends nothing when the Team Admin Claims a Seat themselves", async () => {
+    const seatId = claim("SEAT-1", teamAdmin.id);
+    const { transport, triggers } = recordingTransport();
+
+    await notifySeatClaimed(db, seatId, transport);
+
+    expect(triggers).toEqual([]);
+  });
+
+  it("does not throw when the transport fails", async () => {
+    const seatId = claim("SEAT-1", student.id);
+
+    await expect(
+      notifySeatClaimed(db, seatId, failing)
     ).resolves.toBeUndefined();
   });
 });
