@@ -160,7 +160,7 @@ The Notification telling a course's Instructor that someone bought it, such as "
 _Avoid_: Sale notification, New enrollment, New sale
 
 **Seat claimed**:
-The Notification telling the person who bought a Team Licence that a Student Claimed one of its Seats, such as "Liam claimed a seat on Introduction to TypeScript (3/5)", counting that Team Licence's Claimed and total Seats after the Claim. The Claiming Student gets nothing, and a refused Claim sends nothing. It isn't batched, links to the team page, is on by default and can be switched off.
+The Notification telling the person who bought a Team Licence that a Student Claimed one of its Seats, such as "Liam claimed a seat on Introduction to TypeScript (3/5)", counting that Team Licence's Claimed and total Seats after the Claim. The Claiming Student gets nothing, a refused Claim sends nothing, and no Notification is sent when the Team Admin claims a Seat on their own Team Licence. It isn't batched, links to the team page, is on by default and can be switched off.
 _Avoid_: Seat redeemed, Coupon redeemed, Seat notification
 
 **Refund Request raised**:
