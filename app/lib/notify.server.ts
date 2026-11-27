@@ -764,7 +764,7 @@ export async function notifyNewPurchase(
 
 /**
  * Called once a Student has Claimed a Seat: Seat claimed tells the person who
- * bought its Team Licence, with that Team Licence's used and total Seats as
+ * bought its Team Licence, with that Team Licence's Claimed and total Seats as
  * they are after the Claim. A Seat that isn't Claimed sends nothing, and the
  * Claiming Student never gets it for their own Claim.
  */
@@ -781,6 +781,7 @@ export async function notifySeatClaimed(
         claimerId: coupons.redeemedByUserId,
         buyerId: purchases.userId,
         courseTitle: courses.title,
+        courseSlug: courses.slug,
       })
       .from(coupons)
       .innerJoin(purchases, eq(coupons.purchaseId, purchases.id))
@@ -792,13 +793,14 @@ export async function notifySeatClaimed(
     const buyer = getUser(db, seat.buyerId);
     if (!claimer || !buyer || claimer.id === buyer.id) return;
 
+    // An ungrouped count() always returns exactly one row, so take it by
+    // destructuring rather than guarding against a missing one.
     // count(column) counts only the Seats that have been Claimed.
-    const seats = db
-      .select({ total: count(), used: count(coupons.redeemedByUserId) })
+    const [seats] = db
+      .select({ total: count(), claimed: count(coupons.redeemedByUserId) })
       .from(coupons)
       .where(eq(coupons.purchaseId, seat.purchaseId))
-      .get();
-    if (!seats) return;
+      .all();
 
     await transport.trigger(NotificationWorkflow.SeatClaimed, {
       recipients: [personFor(buyer)],
@@ -807,7 +809,8 @@ export async function notifySeatClaimed(
         seat_id: seat.id,
         actor_name: claimer.name,
         course_title: seat.courseTitle,
-        used_seats: seats.used,
+        course_slug: seat.courseSlug,
+        claimed_seats: seats.claimed,
         total_seats: seats.total,
         url: teamHref(),
       },

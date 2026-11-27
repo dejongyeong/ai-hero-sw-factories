@@ -1330,7 +1330,9 @@ describe("notifyNewPurchase", () => {
 
 describe("notifySeatClaimed", () => {
   let teamAdmin: typeof schema.users.$inferSelect;
+  let teamId: number;
   let purchaseId: number;
+  let unclaimedSeatId: number;
 
   beforeEach(() => {
     teamAdmin = db
@@ -1343,6 +1345,7 @@ describe("notifySeatClaimed", () => {
       .returning()
       .get();
     const team = db.insert(schema.teams).values({}).returning().get();
+    teamId = team.id;
     db.insert(schema.teamMembers)
       .values({
         teamId: team.id,
@@ -1355,13 +1358,16 @@ describe("notifySeatClaimed", () => {
       .values({ userId: teamAdmin.id, courseId, amountPaid: 7900 * 3 })
       .returning()
       .get().id;
-    db.insert(schema.coupons)
+    const seats = db
+      .insert(schema.coupons)
       .values([
         { teamId: team.id, courseId, code: "SEAT-1", purchaseId },
         { teamId: team.id, courseId, code: "SEAT-2", purchaseId },
         { teamId: team.id, courseId, code: "SEAT-3", purchaseId },
       ])
-      .run();
+      .returning()
+      .all();
+    unclaimedSeatId = seats[0].id;
   });
 
   /** Claims the Seat with `code` for `userId`, as redeeming it does. */
@@ -1391,7 +1397,7 @@ describe("notifySeatClaimed", () => {
     ]);
   });
 
-  it("carries the Claiming Student and the Team Licence's used and total Seats after the Claim", async () => {
+  it("carries the Claiming Student and the Team Licence's Claimed and total Seats after the Claim", async () => {
     claim("SEAT-1", otherStudent.id);
     const seatId = claim("SEAT-2", student.id);
     const { transport, triggers } = recordingTransport();
@@ -1407,14 +1413,14 @@ describe("notifySeatClaimed", () => {
       seat_id: seatId,
       actor_name: "Liam",
       course_title: "Introduction to TypeScript",
-      used_seats: 2,
+      course_slug: "intro-ts",
+      claimed_seats: 2,
       total_seats: 3,
       url: "/team",
     });
   });
 
   it("counts only the Seats of the Claimed Seat's own Team Licence", async () => {
-    const team = db.select().from(schema.teams).get()!;
     const topUp = db
       .insert(schema.purchases)
       .values({ userId: teamAdmin.id, courseId, amountPaid: 7900 * 2 })
@@ -1422,8 +1428,8 @@ describe("notifySeatClaimed", () => {
       .get();
     db.insert(schema.coupons)
       .values([
-        { teamId: team.id, courseId, code: "TOP-1", purchaseId: topUp.id },
-        { teamId: team.id, courseId, code: "TOP-2", purchaseId: topUp.id },
+        { teamId, courseId, code: "TOP-1", purchaseId: topUp.id },
+        { teamId, courseId, code: "TOP-2", purchaseId: topUp.id },
       ])
       .run();
     claim("SEAT-1", otherStudent.id);
@@ -1432,18 +1438,16 @@ describe("notifySeatClaimed", () => {
 
     await notifySeatClaimed(db, seatId, transport);
 
-    expect(triggers[0].data).toMatchObject({ used_seats: 1, total_seats: 2 });
+    expect(triggers[0].data).toMatchObject({
+      claimed_seats: 1,
+      total_seats: 2,
+    });
   });
 
   it("sends nothing for a Seat that was not Claimed, as when the Claim is refused", async () => {
-    const seat = db
-      .select()
-      .from(schema.coupons)
-      .where(eq(schema.coupons.code, "SEAT-1"))
-      .get()!;
     const { transport, triggers } = recordingTransport();
 
-    await notifySeatClaimed(db, seat.id, transport);
+    await notifySeatClaimed(db, unclaimedSeatId, transport);
 
     expect(triggers).toEqual([]);
   });

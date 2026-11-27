@@ -219,7 +219,7 @@ probe_workflow() {
     "https://api.knock.app/v1/workflows/$WORKFLOW_KEY/trigger" \
     -H "Authorization: Bearer $key" \
     -H "Content-Type: application/json" \
-    -d '{"recipients":[{"id":"cadence-wizard-probe","name":"Wizard probe"}],"data":{"seat_id":0,"actor_name":"Wizard probe","course_title":"Probe course","used_seats":1,"total_seats":5,"url":"/team"},"settings":{"sandbox_mode":true}}') \
+    -d '{"recipients":[{"id":"cadence-wizard-probe","name":"Wizard probe"}],"data":{"seat_id":0,"actor_name":"Wizard probe","course_title":"Probe course","course_slug":"probe-course","claimed_seats":1,"total_seats":5,"url":"/team"},"settings":{"sandbox_mode":true}}') \
     || { echo "curl failed"; return 0; }
   status=${body##*$'\n'}
   code=$(printf '%s' "${body%$'\n'*}" | grep -o '"code":"[^"]*"' | cut -d'"' -f4 || true)
@@ -256,7 +256,7 @@ note "No Batch step: every Claim is its own Notification."
 step "Pick the same Feed channel the other workflows use (its id is KNOCK_FEED_CHANNEL_ID in .env)."
 step "Edit its template. Choose the ${BOLD}Standard${RESET} variant (the whole row is the link)."
 step "Markdown body:"
-say  "    ${BOLD}**{{ data.actor_name }}** claimed a seat on **{{ data.course_title }}** ({{ data.used_seats }}/{{ data.total_seats }})${RESET}"
+say  "    ${BOLD}**{{ data.actor_name }}** claimed a seat on **{{ data.course_title }}** ({{ data.claimed_seats }}/{{ data.total_seats }})${RESET}"
 step "Action URL: replace the default with ${BOLD}{{ vars.app_url }}{{ data.url }}${RESET}"
 note "data.url is /team, the Team Admin's team page."
 note "Cadence's bell builds its own sentence, but the step still needs a template."

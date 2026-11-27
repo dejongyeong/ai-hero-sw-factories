@@ -289,13 +289,14 @@ describe("describeNotification", () => {
     ]);
   });
 
-  it("describes a Seat claimed with its used and total Seats, under Team", () => {
+  it("describes a Seat claimed with its Claimed and total Seats, under Team", () => {
     expect(
       describeNotification("seat-claimed", {
         seat_id: 9,
         actor_name: "Liam",
         course_title: "Introduction to TypeScript",
-        used_seats: 2,
+        course_slug: "intro-to-typescript",
+        claimed_seats: 2,
         total_seats: 5,
         url: "/team",
       })
