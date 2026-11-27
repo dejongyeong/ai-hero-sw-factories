@@ -19,6 +19,7 @@ export const NotificationWorkflow = {
   RefundFailed: "refund-failed",
   RefundFailedAdmin: "refund-failed-admin",
   NewPurchase: "new-purchase",
+  SeatClaimed: "seat-claimed",
 } as const;
 
 export type NotificationWorkflow =
@@ -39,7 +40,7 @@ export type SentencePart = { text: string; bold: boolean };
  * The Feed category a Notification is filed under, as shown on its row. Each
  * new workflow adds its category here.
  */
-export type FeedCategory = "Discussions" | "Refunds" | "Enrollments";
+export type FeedCategory = "Discussions" | "Refunds" | "Enrollments" | "Team";
 
 export type DescribedNotification = {
   sentence: SentencePart[];
@@ -269,6 +270,28 @@ const workflows = {
       // A batch links to its latest buyer, from Knock's merged data.
       href: data.url,
       category: "Enrollments",
+    })
+  ),
+  [NotificationWorkflow.SeatClaimed]: workflow(
+    z.object({
+      seat_id: z.number().int(),
+      actor_name: z.string(),
+      course_title: z.string(),
+      course_slug: z.string(),
+      // The Team Licence's Seats as they are after the Claim.
+      claimed_seats: z.number().int(),
+      total_seats: z.number().int(),
+      url: z.string().startsWith("/"),
+    }),
+    (data) => ({
+      sentence: [
+        { text: data.actor_name, bold: true },
+        { text: " claimed a seat on ", bold: false },
+        { text: data.course_title, bold: true },
+        { text: ` (${data.claimed_seats}/${data.total_seats})`, bold: false },
+      ],
+      href: data.url,
+      category: "Team",
     })
   ),
 } satisfies Record<NotificationWorkflow, unknown>;

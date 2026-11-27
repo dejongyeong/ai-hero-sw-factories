@@ -159,6 +159,10 @@ _Avoid_: Question notification, New comment
 The Notification telling a course's Instructor that someone bought it, such as "Liam bought Introduction to TypeScript" for an Individual Purchase or "Liam bought 5 seats on Introduction to TypeScript" for a Team Licence. It never goes to a Platform Admin or to the buyer. Purchases of one course are batched over 1 hour so a launch day reads as one, such as "3 new purchases of Introduction to TypeScript". It links to the buyer on the course's student roster, is on by default and can be switched off.
 _Avoid_: Sale notification, New enrollment, New sale
 
+**Seat claimed**:
+The Notification telling the person who bought a Team Licence that a Student Claimed one of its Seats, such as "Liam claimed a seat on Introduction to TypeScript (3/5)", counting that Team Licence's Claimed and total Seats after the Claim. The Claiming Student gets nothing, a refused Claim sends nothing, and no Notification is sent when the Team Admin claims a Seat on their own Team Licence. It isn't batched, links to the team page, is on by default and can be switched off.
+_Avoid_: Seat redeemed, Coupon redeemed, Seat notification
+
 **Refund Request raised**:
 The Notification telling every Platform Admin, except one who raised it themselves, that a Refund Request was raised, such as "Liam requested a refund for Introduction to TypeScript ($79.00)". It links to the Refund Request on the admin queue. A Platform Admin can switch it off.
 _Avoid_: Refund alert, New refund

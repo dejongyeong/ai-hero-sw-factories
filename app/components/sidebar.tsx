@@ -1,6 +1,7 @@
 import { NavLink, Form } from "react-router";
 import { useState, useEffect } from "react";
 import { cn } from "~/lib/utils";
+import { teamHref } from "~/lib/team-links";
 import { UserRole } from "~/db/schema";
 import { UserAvatar } from "~/components/user-avatar";
 import {
@@ -173,7 +174,7 @@ export function Sidebar({
           ))}
         {isTeamAdmin && (
           <NavLink
-            to="/team"
+            to={teamHref()}
             className={({ isActive }) =>
               cn(
                 "flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors",
