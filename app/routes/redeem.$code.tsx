@@ -20,6 +20,7 @@ import {
   RefundRequestStatus,
 } from "~/db/schema";
 import { eq, and } from "drizzle-orm";
+import { notifySeatClaimed } from "~/lib/notify.server";
 
 function getCourseById(id: number) {
   return db.select().from(courses).where(eq(courses.id, id)).get();
@@ -59,7 +60,7 @@ function isPurchaseRefunded(purchaseId: number) {
 }
 
 type RedeemResult =
-  | { ok: true; enrollment: typeof enrollments.$inferSelect }
+  | { ok: true; seatId: number; enrollment: typeof enrollments.$inferSelect }
   | { ok: false; error: string };
 
 function redeemCoupon(
@@ -126,7 +127,7 @@ function redeemCoupon(
     .returning()
     .get();
 
-  return { ok: true, enrollment };
+  return { ok: true, seatId: coupon.id, enrollment };
 }
 
 const redeemParamsSchema = z.object({
@@ -215,6 +216,7 @@ export async function action({ params, request }: Route.ActionArgs) {
   if (!result.ok) {
     return data({ error: result.error }, { status: 400 });
   }
+  await notifySeatClaimed(db, result.seatId);
 
   const course = getCourseById(result.enrollment.courseId);
   if (!course) {

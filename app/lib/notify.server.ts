@@ -1,9 +1,10 @@
 import { Knock } from "@knocklabs/node";
-import { and, eq, ne } from "drizzle-orm";
+import { and, count, eq, ne } from "drizzle-orm";
 import type { Db } from "~/db";
 import {
   RefundRequestStatus,
   UserRole,
+  coupons,
   courses,
   lessons,
   modules,
@@ -20,6 +21,7 @@ import { commentHref } from "~/lib/comment-links";
 import { courseHref } from "~/lib/course-links";
 import { refundRequestHref } from "~/lib/refund-request-links";
 import { studentHref, studentRosterHref } from "~/lib/student-roster-links";
+import { teamHref } from "~/lib/team-links";
 import { formatPrice } from "~/lib/utils";
 import {
   NotificationWorkflow,
@@ -755,6 +757,59 @@ export async function notifyNewPurchase(
           seatCount === null
             ? studentHref(purchase.courseId, buyer.id)
             : studentRosterHref(purchase.courseId),
+      },
+    });
+  });
+}
+
+/**
+ * Called once a Student has Claimed a Seat: Seat claimed tells the person who
+ * bought its Team Licence, with that Team Licence's used and total Seats as
+ * they are after the Claim. A Seat that isn't Claimed sends nothing, and the
+ * Claiming Student never gets it for their own Claim.
+ */
+export async function notifySeatClaimed(
+  db: Db,
+  seatId: number,
+  transport: NotificationTransport = defaultTransport()
+): Promise<void> {
+  await deliver(NotificationWorkflow.SeatClaimed, async () => {
+    const seat = db
+      .select({
+        id: coupons.id,
+        purchaseId: coupons.purchaseId,
+        claimerId: coupons.redeemedByUserId,
+        buyerId: purchases.userId,
+        courseTitle: courses.title,
+      })
+      .from(coupons)
+      .innerJoin(purchases, eq(coupons.purchaseId, purchases.id))
+      .innerJoin(courses, eq(coupons.courseId, courses.id))
+      .where(eq(coupons.id, seatId))
+      .get();
+    if (!seat || seat.claimerId === null) return;
+    const claimer = getUser(db, seat.claimerId);
+    const buyer = getUser(db, seat.buyerId);
+    if (!claimer || !buyer || claimer.id === buyer.id) return;
+
+    // count(column) counts only the Seats that have been Claimed.
+    const seats = db
+      .select({ total: count(), used: count(coupons.redeemedByUserId) })
+      .from(coupons)
+      .where(eq(coupons.purchaseId, seat.purchaseId))
+      .get();
+    if (!seats) return;
+
+    await transport.trigger(NotificationWorkflow.SeatClaimed, {
+      recipients: [personFor(buyer)],
+      actor: personFor(claimer),
+      data: {
+        seat_id: seat.id,
+        actor_name: claimer.name,
+        course_title: seat.courseTitle,
+        used_seats: seats.used,
+        total_seats: seats.total,
+        url: teamHref(),
       },
     });
   });
